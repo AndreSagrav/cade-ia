@@ -1,11 +1,15 @@
 import { useEffect, useState } from 'react';
 import { Layout } from './components/layout/Layout';
 import { SettingsModal } from './components/settings/SettingsModal';
+import { AuthGate } from './components/auth/AuthModal';
 import { useSettingsStore } from './store/settings-store';
 
 export function App() {
   const theme = useSettingsStore((s) => s.theme);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [authenticated, setAuthenticated] = useState(
+    () => localStorage.getItem('codeai-auth') === 'true',
+  );
 
   useEffect(() => {
     const root = document.documentElement;
@@ -29,6 +33,10 @@ export function App() {
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
   }, []);
+
+  if (!authenticated) {
+    return <AuthGate onUnlock={() => setAuthenticated(true)} />;
+  }
 
   return (
     <>

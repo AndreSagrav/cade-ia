@@ -3,6 +3,7 @@ import { useSettingsStore } from '@/store/settings-store';
 import { useEditorStore } from '@/store/editor-store';
 import { useChatStore } from '@/store/chat-store';
 import { AI_MODELS } from '@shared/models';
+import { processAgentResponse, executeAllChanges } from './agent';
 import type { AIProvider } from '@shared/types';
 
 /** Build the system prompt with project context */
@@ -11,7 +12,20 @@ function buildSystemPrompt(): string {
   const contextFiles = useEditorStore.getState().contextFiles;
   const openFiles = useEditorStore.getState().openFiles;
 
-  let system = `Eres CodeAI, un asistente de programación experto. Respondes en español. Cuando generes código, usa bloques de código con el lenguaje indicado. Si necesitas modificar un archivo existente, indica el nombre del archivo.`;
+  const agentMode = useChatStore.getState().agentMode;
+
+  let system = `Eres CodeAI, un asistente de programación experto. Respondes en español.`;
+
+  if (agentMode) {
+    system += `\n\nMODO AGENTE ACTIVO. Puedes ejecutar acciones directamente:
+- Para CREAR o EDITAR un archivo, usa: \`\`\`ts file:ruta/del/archivo.ts\\n...código completo...\\n\`\`\`
+- Para EJECUTAR un comando, usa: \`\`\`run\\ncomando aquí\\n\`\`\`
+- Puedes hacer múltiples acciones en una sola respuesta.
+- Siempre explica brevemente qué vas a hacer antes de actuar.
+- El contenido de file: REEMPLAZA todo el archivo (escribe el archivo completo).`;
+  } else {
+    system += `\nCuando generes código, usa bloques de código con el lenguaje indicado. Si necesitas modificar un archivo existente, indica el nombre del archivo.`;
+  }
 
   if (rootPath) {
     system += `\n\nProyecto abierto: ${rootPath}`;
@@ -184,6 +198,12 @@ export async function streamChat(_userMessage: string): Promise<void> {
       timestamp: Date.now(),
       model: selectedModel,
     });
+
+    // Agent mode: parse response and auto-execute changes
+    if (chatStore.agentMode && fullContent) {
+      processAgentResponse(fullContent);
+      await executeAllChanges();
+    }
   } catch (e: any) {
     if (e.name !== 'AbortError') {
       chatStore.addMessage({
