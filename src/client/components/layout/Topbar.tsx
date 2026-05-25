@@ -5,10 +5,16 @@ import {
 import type { LucideIcon } from 'lucide-react';
 import { useSettingsStore } from '@/store/settings-store';
 import { useEditorStore } from '@/store/editor-store';
+import { useProject } from '@/lib/use-project';
 
-export function Topbar() {
+interface TopbarProps {
+  onOpenSettings?: () => void;
+}
+
+export function Topbar({ onOpenSettings }: TopbarProps) {
   const { theme, setTheme } = useSettingsStore();
   const rootPath = useEditorStore((s) => s.rootPath);
+  const { handleOpenFolder, handleSaveFile, handleRunCommand } = useProject();
 
   return (
     <header className="flex h-[54px] min-h-[54px] items-center gap-2 border-b border-border bg-surface px-4 backdrop-blur-xl">
@@ -28,11 +34,11 @@ export function Topbar() {
       <Separator />
 
       {/* Project actions */}
-      <ToolButton icon={FolderOpen} label="Abrir carpeta" primary />
-      <ToolButton icon={Save} label="Guardar" shortcut="Ctrl+S" />
+      <ToolButton icon={FolderOpen} label="Abrir carpeta" primary onClick={handleOpenFolder} />
+      <ToolButton icon={Save} label="Guardar" shortcut="Ctrl+S" onClick={handleSaveFile} />
       <Separator />
-      <ToolButton icon={Play} label="Ejecutar" />
-      <ToolButton icon={Package} label="npm install" />
+      <ToolButton icon={Play} label="Ejecutar" onClick={() => handleRunCommand('npm start')} />
+      <ToolButton icon={Package} label="npm install" onClick={() => handleRunCommand('npm install')} />
       <Separator />
       <ToolButton icon={Monitor} label="Preview" />
       <ToolButton icon={Zap} label="Scaffold" />
@@ -61,8 +67,9 @@ export function Topbar() {
 
       {/* Settings */}
       <button
+        onClick={onOpenSettings}
         className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-        title="Configuración"
+        title="Configuración (Ctrl+,)"
       >
         <Settings size={15} />
       </button>

@@ -3,6 +3,7 @@ import { Send, Paperclip, Bot, User, Sparkles, Zap } from 'lucide-react';
 import { useChatStore } from '@/store/chat-store';
 import { AI_MODELS } from '@shared/models';
 import { cn } from '@/lib/utils';
+import { streamChat } from '@/lib/ai-stream';
 import { ModelSelector } from './ModelSelector';
 
 export function ChatPanel() {
@@ -52,21 +53,8 @@ export function ChatPanel() {
       timestamp: Date.now(),
     });
 
-    // TODO: Call AI stream service
-    setStreaming(true);
-    setStreamContent('');
-
-    // Placeholder: simulate response
-    setTimeout(() => {
-      addMessage({
-        id: Date.now().toString(36) + 'a',
-        role: 'assistant',
-        content: 'Conecta tu API key para recibir respuestas. Ve a Configuración > API Keys.',
-        timestamp: Date.now(),
-        model: selectedModel,
-      });
-      setStreaming(false);
-    }, 800);
+    // Call real AI stream
+    await streamChat(text);
   }, [input, isStreaming, activeSessionId, selectedModel, addMessage, createSession, setStreaming, setStreamContent]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {

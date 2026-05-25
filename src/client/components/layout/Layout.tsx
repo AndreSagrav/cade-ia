@@ -7,12 +7,16 @@ import { Terminal } from '../terminal/Terminal';
 import { StatusBar } from './StatusBar';
 import { useSettingsStore } from '@/store/settings-store';
 
-export function Layout() {
+interface LayoutProps {
+  onOpenSettings?: () => void;
+}
+
+export function Layout({ onOpenSettings }: LayoutProps) {
   const { sidebarVisible, chatVisible, terminalVisible } = useSettingsStore();
 
   return (
     <div className="flex h-screen flex-col overflow-hidden">
-      <Topbar />
+      <Topbar onOpenSettings={onOpenSettings} />
       <div className="flex flex-1 overflow-hidden">
         <PanelGroup direction="horizontal" className="flex-1">
           {sidebarVisible && (

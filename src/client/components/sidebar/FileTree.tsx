@@ -1,11 +1,13 @@
 import { useState } from 'react';
 import { ChevronRight, Plus, RefreshCw } from 'lucide-react';
 import { useEditorStore } from '@/store/editor-store';
+import { useProject } from '@/lib/use-project';
 import { cn, getFileIcon, SKIP_DIRS } from '@/lib/utils';
 import type { FileEntry } from '@shared/types';
 
 export function FileTree() {
   const { fileTree, rootPath, activeFilePath, contextFiles, toggleContextFile } = useEditorStore();
+  const { handleOpenFile, handleRefreshTree } = useProject();
 
   if (!rootPath) {
     return (
@@ -30,7 +32,7 @@ export function FileTree() {
           <button className="rounded p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground">
             <Plus size={12} />
           </button>
-          <button className="rounded p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground">
+          <button onClick={handleRefreshTree} className="rounded p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground">
             <RefreshCw size={12} />
           </button>
         </div>
@@ -46,6 +48,7 @@ export function FileTree() {
             activeFilePath={activeFilePath}
             contextFiles={contextFiles}
             onToggleContext={toggleContextFile}
+            onOpenFile={handleOpenFile}
           />
         ))}
       </div>
@@ -64,9 +67,10 @@ interface TreeNodeProps {
   activeFilePath: string | null;
   contextFiles: Set<string>;
   onToggleContext: (path: string) => void;
+  onOpenFile: (path: string) => void;
 }
 
-function TreeNode({ entry, depth, activeFilePath, contextFiles, onToggleContext }: TreeNodeProps) {
+function TreeNode({ entry, depth, activeFilePath, contextFiles, onToggleContext, onOpenFile }: TreeNodeProps) {
   const [expanded, setExpanded] = useState(false);
   const isActive = entry.path === activeFilePath;
   const isContext = contextFiles.has(entry.path);
@@ -98,6 +102,7 @@ function TreeNode({ entry, depth, activeFilePath, contextFiles, onToggleContext 
             activeFilePath={activeFilePath}
             contextFiles={contextFiles}
             onToggleContext={onToggleContext}
+            onOpenFile={onOpenFile}
           />
         ))}
       </>
@@ -106,6 +111,7 @@ function TreeNode({ entry, depth, activeFilePath, contextFiles, onToggleContext 
 
   return (
     <button
+      onClick={() => onOpenFile(entry.path)}
       className={cn(
         'group flex w-full items-center gap-1.5 px-2 py-[5px] text-left text-[12.5px] transition-colors',
         isActive

@@ -1,9 +1,11 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { Layout } from './components/layout/Layout';
+import { SettingsModal } from './components/settings/SettingsModal';
 import { useSettingsStore } from './store/settings-store';
 
 export function App() {
   const theme = useSettingsStore((s) => s.theme);
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -16,5 +18,22 @@ export function App() {
     }
   }, [theme]);
 
-  return <Layout />;
+  // Global keyboard shortcut: Ctrl+,
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === ',') {
+        e.preventDefault();
+        setSettingsOpen((v) => !v);
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, []);
+
+  return (
+    <>
+      <Layout onOpenSettings={() => setSettingsOpen(true)} />
+      <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+    </>
+  );
 }

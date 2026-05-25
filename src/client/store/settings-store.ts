@@ -27,6 +27,8 @@ interface SettingsState {
   setSidebarWidth: (width: number) => void;
   setChatWidth: (width: number) => void;
   setTerminalHeight: (height: number) => void;
+  toggleWordWrap: () => void;
+  toggleMinimap: () => void;
   toggleTerminal: () => void;
   toggleSidebar: () => void;
   toggleChat: () => void;
@@ -78,6 +80,8 @@ export const useSettingsStore = create<SettingsState>()(
       setSidebarWidth: (width) => set({ sidebarWidth: Math.max(180, Math.min(500, width)) }),
       setChatWidth: (width) => set({ chatWidth: Math.max(300, Math.min(700, width)) }),
       setTerminalHeight: (height) => set({ terminalHeight: Math.max(100, Math.min(600, height)) }),
+      toggleWordWrap: () => set({ wordWrap: !get().wordWrap }),
+      toggleMinimap: () => set({ minimap: !get().minimap }),
       toggleTerminal: () => set({ terminalVisible: !get().terminalVisible }),
       toggleSidebar: () => set({ sidebarVisible: !get().sidebarVisible }),
       toggleChat: () => set({ chatVisible: !get().chatVisible }),
