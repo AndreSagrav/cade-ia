@@ -56,6 +56,8 @@ function getProviderConfig(provider: AIProvider, apiKeys: Record<string, string>
       return { path: '/api/ai/gemini', headers: {} };
     case 'deepseek':
       return { path: '/api/ai/deepseek', headers: { 'Authorization': `Bearer ${apiKeys.deepseek || ''}` } };
+    case 'nvidia':
+      return { path: '/api/ai/nvidia', headers: { 'Authorization': `Bearer ${apiKeys.nvidia || ''}` } };
     case 'openrouter':
       return { path: '/api/ai/openrouter', headers: { 'Authorization': `Bearer ${apiKeys.openrouter || ''}` } };
     default:
@@ -96,6 +98,7 @@ function buildRequestBody(
       };
     case 'openai':
     case 'deepseek':
+    case 'nvidia':
     case 'openrouter':
     default:
       return {

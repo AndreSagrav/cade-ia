@@ -21,6 +21,11 @@ function loadEnv(): Record<string, string> {
 
 const env = { ...loadEnv(), ...process.env };
 
+// Inject loaded env vars into process.env so all modules can access them
+for (const [key, value] of Object.entries(loadEnv())) {
+  if (!process.env[key]) process.env[key] = value;
+}
+
 export const config = {
   port: parseInt(env.PORT ?? '3001', 10),
   nodeEnv: env.NODE_ENV ?? 'development',
@@ -35,4 +40,8 @@ export const config = {
   nvidiaApiKey: env.NVIDIA_API_KEY ?? '',
   deepseekApiKey: env.DEEPSEEK_API_KEY ?? '',
   openrouterApiKey: env.OPENROUTER_API_KEY ?? '',
+
+  // Auth
+  authUser: env.AUTH_USER ?? '',
+  authPass: env.AUTH_PASS ?? '',
 } as const;

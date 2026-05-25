@@ -1,11 +1,12 @@
 import { Router, Request, Response } from 'express';
 import crypto from 'crypto';
+import { config } from '../config';
 
 export const authRouter = Router();
 
-// Credentials from environment variables (never exposed to frontend)
-const AUTH_USER = process.env.AUTH_USER || '';
-const AUTH_PASS = process.env.AUTH_PASS || '';
+// Credentials from config (loaded from .env, never exposed to frontend)
+const AUTH_USER = config.authUser;
+const AUTH_PASS = config.authPass;
 
 // Simple token store (in production, use JWT or sessions)
 const validTokens = new Set<string>();

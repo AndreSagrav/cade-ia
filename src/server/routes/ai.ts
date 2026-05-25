@@ -145,6 +145,40 @@ aiRouter.post('/deepseek', async (req: Request, res: Response) => {
   }
 });
 
+// NVIDIA NIM proxy (OpenAI-compatible API)
+aiRouter.post('/nvidia', async (req: Request, res: Response) => {
+  const apiKey = req.headers['authorization'] as string || `Bearer ${config.nvidiaApiKey}`;
+  if (!apiKey || apiKey === 'Bearer ') return res.status(401).json({ error: 'No NVIDIA API key' });
+
+  try {
+    const response = await fetch('https://integrate.api.nvidia.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': apiKey,
+      },
+      body: JSON.stringify(req.body),
+    });
+
+    res.status(response.status);
+    res.setHeader('Content-Type', response.headers.get('content-type') ?? 'text/event-stream');
+    if (response.body) {
+      const reader = response.body.getReader();
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        res.write(value);
+      }
+      res.end();
+    } else {
+      res.send(await response.text());
+    }
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'Proxy error';
+    res.status(500).json({ error: message });
+  }
+});
+
 // OpenRouter proxy
 aiRouter.post('/openrouter', async (req: Request, res: Response) => {
   const apiKey = req.headers['authorization'] as string || `Bearer ${config.openrouterApiKey}`;
