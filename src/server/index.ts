@@ -9,6 +9,7 @@ import { filesRouter } from './routes/files';
 import { aiRouter } from './routes/ai';
 import { terminalRouter } from './routes/terminal';
 import { gitRouter } from './routes/git';
+import { authRouter } from './routes/auth';
 
 const app = express();
 const server = createServer(app);
@@ -36,6 +37,7 @@ app.use('/api/files', filesRouter);
 app.use('/api/ai', aiRouter);
 app.use('/api/terminal', terminalRouter);
 app.use('/api/git', gitRouter);
+app.use('/api/auth', authRouter);
 
 // Health check
 app.get('/api/health', (_req, res) => {

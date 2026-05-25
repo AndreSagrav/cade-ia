@@ -7,9 +7,22 @@ import { useSettingsStore } from './store/settings-store';
 export function App() {
   const theme = useSettingsStore((s) => s.theme);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [authenticated, setAuthenticated] = useState(
-    () => localStorage.getItem('codeai-auth') === 'true',
-  );
+  const [authenticated, setAuthenticated] = useState(false);
+  const [authChecked, setAuthChecked] = useState(false);
+
+  // Verify saved token on mount
+  useEffect(() => {
+    const token = localStorage.getItem('codeai-auth');
+    if (!token) { setAuthChecked(true); return; }
+    fetch('/api/auth/verify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token }),
+    })
+      .then((r) => { if (r.ok) setAuthenticated(true); })
+      .catch(() => {})
+      .finally(() => setAuthChecked(true));
+  }, []);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -33,6 +46,14 @@ export function App() {
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
   }, []);
+
+  if (!authChecked) {
+    return (
+      <div className="flex h-screen items-center justify-center bg-background">
+        <div className="text-sm text-muted-foreground">Verificando sesión...</div>
+      </div>
+    );
+  }
 
   if (!authenticated) {
     return <AuthGate onUnlock={() => setAuthenticated(true)} />;

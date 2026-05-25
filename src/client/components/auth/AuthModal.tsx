@@ -1,10 +1,6 @@
 import { useState } from 'react';
 import { Lock } from 'lucide-react';
 
-const USERS: Record<string, string> = {
-  'batisvar@gmail.com': 'Cbva050579.',
-};
-
 interface AuthGateProps {
   onUnlock: () => void;
 }
@@ -13,16 +9,31 @@ export function AuthGate({ onUnlock }: AuthGateProps) {
   const [user, setUser] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const expected = USERS[user.toLowerCase().trim()];
-    if (expected && expected === password) {
-      localStorage.setItem('codeai-auth', 'true');
-      onUnlock();
-    } else {
-      setError('Usuario o contraseña incorrectos');
+    setError('');
+    setLoading(true);
+
+    try {
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user, password }),
+      });
+      const data = await res.json();
+
+      if (res.ok && data.token) {
+        localStorage.setItem('codeai-auth', data.token);
+        onUnlock();
+      } else {
+        setError(data.error || 'Credenciales inválidas');
+      }
+    } catch {
+      setError('Error de conexión con el servidor');
     }
+    setLoading(false);
   };
 
   return (
@@ -64,9 +75,10 @@ export function AuthGate({ onUnlock }: AuthGateProps) {
 
           <button
             type="submit"
-            className="flex w-full items-center justify-center gap-2 rounded-md bg-accent px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-accent-dim"
+            disabled={loading}
+            className="flex w-full items-center justify-center gap-2 rounded-md bg-accent px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-accent-dim disabled:opacity-50"
           >
-            Entrar
+            {loading ? 'Verificando...' : 'Entrar'}
           </button>
         </form>
       </div>

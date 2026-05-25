@@ -34,17 +34,36 @@ interface SettingsState {
   toggleChat: () => void;
 }
 
+/** Migrate API keys from v1 (localStorage 'codeai_keys') */
+function migrateV1Keys(): Partial<APIKeys> {
+  try {
+    const raw = localStorage.getItem('codeai_keys');
+    if (!raw) return {};
+    const v1 = JSON.parse(raw);
+    return {
+      claude: v1.claude || '',
+      openai: v1.openai || '',
+      gemini: v1.gemini || '',
+      nvidia: v1.nvidia || '',
+      deepseek: v1.deepseek || '',
+      openrouter: v1.openrouter || '',
+    };
+  } catch { return {}; }
+}
+
+const v1Keys = migrateV1Keys();
+
 export const useSettingsStore = create<SettingsState>()(
   persist(
     (set, get) => ({
       theme: 'dark',
       apiKeys: {
-        claude: '',
-        openai: '',
-        gemini: '',
-        nvidia: '',
-        deepseek: '',
-        openrouter: '',
+        claude: v1Keys.claude || '',
+        openai: v1Keys.openai || '',
+        gemini: v1Keys.gemini || '',
+        nvidia: v1Keys.nvidia || '',
+        deepseek: v1Keys.deepseek || '',
+        openrouter: v1Keys.openrouter || '',
       },
       fontSize: 13.5,
       wordWrap: false,
