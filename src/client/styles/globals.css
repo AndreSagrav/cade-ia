@@ -1,0 +1,83 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 220 14% 11%;
+    --foreground: 30 12% 88%;
+    --muted: 220 10% 15%;
+    --muted-foreground: 30 8% 62%;
+    --accent: 187 100% 38%;
+    --accent-foreground: 0 0% 100%;
+    --accent-dim: 187 100% 28%;
+    --border: 0 0% 100% / 0.07;
+    --surface: 220 12% 13% / 0.8;
+    --destructive: 22 74% 51%;
+    --destructive-foreground: 0 0% 100%;
+    --success: 213 47% 58%;
+    --success-foreground: 0 0% 100%;
+    --warning: 42 55% 55%;
+    --warning-foreground: 0 0% 100%;
+    --radius-sm: 6px;
+    --radius-md: 8px;
+    --radius-lg: 12px;
+  }
+
+  .light {
+    --background: 36 20% 95%;
+    --foreground: 30 5% 16%;
+    --muted: 36 14% 90%;
+    --muted-foreground: 30 5% 40%;
+    --accent: 187 100% 28%;
+    --accent-foreground: 0 0% 100%;
+    --accent-dim: 187 100% 38%;
+    --border: 0 0% 0% / 0.08;
+    --surface: 36 20% 95% / 0.82;
+    --destructive: 22 74% 45%;
+    --destructive-foreground: 0 0% 100%;
+    --success: 213 47% 45%;
+    --success-foreground: 0 0% 100%;
+    --warning: 42 55% 42%;
+    --warning-foreground: 0 0% 100%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply h-screen overflow-hidden font-sans text-sm;
+    font-feature-settings: 'cv11', 'ss01', 'ss03';
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: hsl(var(--muted-foreground) / 0.2);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: hsl(var(--muted-foreground) / 0.35);
+}
+
+/* Monaco Editor overrides */
+.monaco-editor .margin,
+.monaco-editor .monaco-editor-background {
+  background: hsl(var(--background)) !important;
+}
