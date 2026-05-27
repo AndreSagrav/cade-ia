@@ -1,21 +1,73 @@
 import { api } from './api';
 import { useEditorStore } from '@/store/editor-store';
+import { useChatStore } from '@/store/chat-store';
+import { getLanguageFromPath } from './utils';
 import type { PendingChange } from '@shared/types';
 
 /**
+ * Reverts all agent file changes that occurred after the given messageId,
+ * then truncates the chat history.
+ */
+export async function rewindToMessage(messageId: string): Promise<void> {
+  const chatStore = useChatStore.getState();
+  const editorStore = useEditorStore.getState();
+  const rootPath = editorStore.rootPath;
+  if (!rootPath) return;
+
+  const session = chatStore.sessions.find(s => s.id === chatStore.activeSessionId);
+  if (!session) return;
+
+  const messages = session.messages;
+  const targetIndex = messages.findIndex(m => m.id === messageId);
+  if (targetIndex === -1) return;
+
+  // Revert changes in reverse chronological order
+  for (let i = messages.length - 1; i > targetIndex; i--) {
+    const msg = messages[i];
+    if (msg.agentChanges && msg.agentChanges.length > 0) {
+      for (let j = msg.agentChanges.length - 1; j >= 0; j--) {
+        const change = msg.agentChanges[j];
+        try {
+          await api.writeFile({
+            path: change.path,
+            content: change.oldContent,
+            root: rootPath,
+          });
+          
+          // Revert preview if active, or update open file content
+          editorStore.revertPreview(change.path);
+          editorStore.updateFileContent(change.path, change.oldContent);
+          editorStore.markFileSaved(change.path);
+        } catch (e) {
+          console.error('Failed to rewind file:', change.path, e);
+        }
+      }
+    }
+  }
+
+  // Truncate messages after targetIndex
+  chatStore.truncateMessagesFrom(messageId);
+}
+
+/** Generate a stable-ish unique id */
+function uid(): string {
+  return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+}
+
+/**
  * Parse AI response to detect actionable blocks:
- * - ```file:path/to/file.ts  → write file
- * - ```run: command           → execute command
+ * - ```ts file:path/to/file.ts  → write/replace file
+ * - ```run                        → execute command
  */
 export function parseAgentActions(content: string): PendingChange[] {
   const changes: PendingChange[] = [];
-  
+
   // Match file blocks: ```language file:path\n...code...\n```
   const fileRegex = /```(?:\w+)?\s*file:([^\n]+)\n([\s\S]*?)```/g;
   let match;
   while ((match = fileRegex.exec(content)) !== null) {
     changes.push({
-      id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+      id: uid(),
       type: 'replace',
       file: match[1].trim(),
       content: match[2].trimEnd(),
@@ -29,7 +81,7 @@ export function parseAgentActions(content: string): PendingChange[] {
     const cmds = match[1].trim().split('\n').filter(Boolean);
     for (const cmd of cmds) {
       changes.push({
-        id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+        id: uid(),
         type: 'run',
         content: cmd.trim(),
         status: 'pending',
@@ -41,26 +93,86 @@ export function parseAgentActions(content: string): PendingChange[] {
 }
 
 /**
- * Execute a single pending change
+ * Strip agent action blocks (file:, run) from a message so only prose remains.
+ * Used so the chat doesn't show the raw code – the code lives in the editor.
  */
-export async function executeChange(change: PendingChange): Promise<{ ok: boolean; error?: string }> {
-  const rootPath = useEditorStore.getState().rootPath;
+export function stripAgentBlocks(content: string): string {
+  return content
+    .replace(/```(?:\w+)?\s*file:[^\n]+\n[\s\S]*?```/g, '')
+    .replace(/```run\n[\s\S]*?```/g, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+/**
+ * For each file change: load the current file content and open it in the editor
+ * as a preview (yellow-highlighted). The change stays pending until the user
+ * clicks Accept or Reject from the floating bar.
+ */
+export async function processAgentResponse(content: string): Promise<void> {
+  const changes = parseAgentActions(content);
+  if (changes.length === 0) return;
+
+  const store = useEditorStore.getState();
+  const rootPath = store.rootPath;
+
+  for (const change of changes) {
+    store.addPendingChange(change);
+
+    if (change.type === 'replace' && change.file && rootPath) {
+      // Fetch current content (or empty if new file)
+      let original = '';
+      try {
+        const res = await api.readFile({ path: change.file, root: rootPath });
+        if (res.ok) original = res.content;
+      } catch {
+        // file doesn't exist yet → empty original (new file)
+      }
+
+      // Make sure the file is opened in editor with preview content
+      const openFiles = useEditorStore.getState().openFiles;
+      if (!openFiles.has(change.file)) {
+        useEditorStore.getState().openFile(change.file, {
+          path: change.file,
+          content: original,
+          language: getLanguageFromPath(change.file),
+          modified: false,
+        });
+      }
+
+      useEditorStore.getState().applyPreview(
+        change.file,
+        original,
+        change.content,
+        change.id,
+      );
+    }
+  }
+}
+
+/**
+ * Accept a single pending change: persist preview to disk, mark accepted.
+ */
+export async function acceptChange(change: PendingChange): Promise<{ ok: boolean; error?: string }> {
+  const store = useEditorStore.getState();
+  const rootPath = store.rootPath;
   if (!rootPath) return { ok: false, error: 'No project open' };
 
   try {
     if (change.type === 'replace' && change.file) {
-      // Write file
       await api.writeFile({
         path: change.file,
         content: change.content,
         root: rootPath,
       });
+      store.commitPreview(change.file);
+      store.updateChangeStatus(change.id, 'accepted');
       return { ok: true };
     }
 
     if (change.type === 'run') {
-      // Execute command
       const result = await api.runCommand({ cmd: change.content, cwd: rootPath });
+      store.updateChangeStatus(change.id, 'accepted');
       if (result.code !== 0 && result.stderr) {
         return { ok: false, error: result.stderr.slice(0, 200) };
       }
@@ -69,38 +181,32 @@ export async function executeChange(change: PendingChange): Promise<{ ok: boolea
 
     return { ok: false, error: 'Unknown change type' };
   } catch (e: any) {
+    store.updateChangeStatus(change.id, 'rejected');
     return { ok: false, error: e.message };
   }
 }
 
 /**
- * Execute all pending changes sequentially
+ * Reject a single pending change: revert preview, mark rejected.
  */
-export async function executeAllChanges(): Promise<void> {
+export async function rejectChange(change: PendingChange): Promise<void> {
   const store = useEditorStore.getState();
-  const changes = store.pendingChanges.filter((c) => c.status === 'pending');
-
-  for (const change of changes) {
-    const result = await executeChange(change);
-    store.updateChangeStatus(change.id, result.ok ? 'accepted' : 'rejected');
+  const rootPath = store.rootPath;
+  if (change.type === 'replace' && change.file) {
+    // If the agent wrote changes to disk, we must restore the old content
+    if (rootPath && change.original !== undefined) {
+      try {
+        await api.writeFile({
+          path: change.file,
+          content: change.original,
+          root: rootPath,
+        });
+      } catch (e) {
+        console.error('Failed to revert file on disk:', e);
+      }
+    }
+    store.revertPreview(change.file);
   }
-
-  // Refresh file tree after changes
-  if (store.rootPath) {
-    const treeResult = await api.getTree({ root: store.rootPath });
-    store.setFileTree(treeResult.items as any);
-  }
+  store.updateChangeStatus(change.id, 'rejected');
 }
 
-/**
- * Process AI response in agent mode: parse and queue changes
- */
-export function processAgentResponse(content: string): void {
-  const changes = parseAgentActions(content);
-  if (changes.length === 0) return;
-
-  const store = useEditorStore.getState();
-  for (const change of changes) {
-    store.addPendingChange(change);
-  }
-}

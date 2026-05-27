@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import type { APIKeys } from '@shared/types';
+import type { APIKeys, GitHubAccount } from '@shared/types';
 
 type Theme = 'dark' | 'light' | 'system';
 
@@ -16,11 +16,16 @@ interface SettingsState {
   terminalVisible: boolean;
   sidebarVisible: boolean;
   chatVisible: boolean;
+  githubAccounts: GitHubAccount[];
+  activeGithubAccount: string | null;
 
   // Actions
   setTheme: (theme: Theme) => void;
   setApiKey: (provider: keyof APIKeys, key: string) => void;
   setAllApiKeys: (keys: Partial<APIKeys>) => void;
+  addGithubAccount: (account: GitHubAccount) => void;
+  removeGithubAccount: (username: string) => void;
+  setActiveGithubAccount: (username: string | null) => void;
   setFontSize: (size: number) => void;
   setWordWrap: (enabled: boolean) => void;
   setMinimap: (enabled: boolean) => void;
@@ -65,6 +70,8 @@ export const useSettingsStore = create<SettingsState>()(
         deepseek: v1Keys.deepseek || '',
         openrouter: v1Keys.openrouter || '',
       },
+      githubAccounts: [],
+      activeGithubAccount: null,
       fontSize: 13.5,
       wordWrap: false,
       minimap: true,
@@ -93,6 +100,29 @@ export const useSettingsStore = create<SettingsState>()(
       setAllApiKeys: (keys) =>
         set({ apiKeys: { ...get().apiKeys, ...keys } }),
 
+      addGithubAccount: (account) => set((state) => {
+        const exists = state.githubAccounts.find((a) => a.username === account.username);
+        const newAccounts = exists
+          ? state.githubAccounts.map((a) => a.username === account.username ? account : a)
+          : [...state.githubAccounts, account];
+        return {
+          githubAccounts: newAccounts,
+          activeGithubAccount: state.activeGithubAccount || account.username,
+        };
+      }),
+
+      removeGithubAccount: (username) => set((state) => {
+        const newAccounts = state.githubAccounts.filter((a) => a.username !== username);
+        return {
+          githubAccounts: newAccounts,
+          activeGithubAccount: state.activeGithubAccount === username 
+            ? (newAccounts[0]?.username || null) 
+            : state.activeGithubAccount
+        };
+      }),
+
+      setActiveGithubAccount: (username) => set({ activeGithubAccount: username }),
+
       setFontSize: (size) => set({ fontSize: Math.max(10, Math.min(24, size)) }),
       setWordWrap: (enabled) => set({ wordWrap: enabled }),
       setMinimap: (enabled) => set({ minimap: enabled }),
@@ -110,6 +140,8 @@ export const useSettingsStore = create<SettingsState>()(
       partialize: (state) => ({
         theme: state.theme,
         apiKeys: state.apiKeys,
+        githubAccounts: state.githubAccounts,
+        activeGithubAccount: state.activeGithubAccount,
         fontSize: state.fontSize,
         wordWrap: state.wordWrap,
         minimap: state.minimap,
@@ -120,6 +152,26 @@ export const useSettingsStore = create<SettingsState>()(
         sidebarVisible: state.sidebarVisible,
         chatVisible: state.chatVisible,
       }),
+      onRehydrateStorage: () => (state) => {
+        // After rehydration, fill any empty keys from v1
+        if (!state) return;
+        const keys = state.apiKeys;
+        const needsMigration = Object.values(keys).every((k) => !k);
+        if (needsMigration && Object.values(v1Keys).some((k) => !!k)) {
+          state.setAllApiKeys(v1Keys as APIKeys);
+        } else {
+          // Fill individual empty keys from v1
+          const merged: Partial<APIKeys> = {};
+          let changed = false;
+          for (const [provider, v1Val] of Object.entries(v1Keys)) {
+            if (!keys[provider as keyof APIKeys] && v1Val) {
+              merged[provider as keyof APIKeys] = v1Val;
+              changed = true;
+            }
+          }
+          if (changed) state.setAllApiKeys(merged as APIKeys);
+        }
+      },
     },
   ),
 );

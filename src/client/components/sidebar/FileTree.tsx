@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ChevronRight, Plus, RefreshCw } from 'lucide-react';
+import { ChevronRight, RotateCcw, FolderOpen } from 'lucide-react';
 import { useEditorStore } from '@/store/editor-store';
 import { useProject } from '@/lib/use-project';
 import { cn, getFileIcon, SKIP_DIRS } from '@/lib/utils';
@@ -7,39 +7,57 @@ import type { FileEntry } from '@shared/types';
 
 export function FileTree() {
   const { fileTree, rootPath, activeFilePath, contextFiles, toggleContextFile } = useEditorStore();
-  const { handleOpenFile, handleRefreshTree } = useProject();
+  const { handleOpenFile, handleRefreshTree, handleOpenFolder } = useProject();
 
   if (!rootPath) {
     return (
-      <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
-        <div className="text-4xl">📁</div>
-        <p className="text-sm font-medium text-foreground">Sin proyecto abierto</p>
-        <p className="text-xs text-muted-foreground">
-          Haz clic en <span className="text-accent">Abrir carpeta</span> para comenzar.
-        </p>
+      <div className="flex flex-1 flex-col items-center justify-center gap-5 p-6 text-center animate-fade-in">
+        <div
+          className="flex h-14 w-14 items-center justify-center rounded-2xl border"
+          style={{
+            background: 'hsl(var(--accent) / 0.08)',
+            borderColor: 'hsl(var(--border))',
+          }}
+        >
+          <FolderOpen size={24} style={{ color: 'hsl(var(--accent))' }} />
+        </div>
+        <div>
+          <p className="text-sm font-semibold text-foreground">Sin proyecto</p>
+          <p className="mt-1 text-[11px] text-muted-foreground">
+            Abre una carpeta para empezar
+          </p>
+        </div>
+        <button
+          onClick={handleOpenFolder}
+          className="btn-accent rounded-lg px-5 py-2 text-[11px] font-semibold"
+        >
+          Abrir proyecto
+        </button>
       </div>
     );
   }
 
   return (
-    <div className="flex flex-1 flex-col overflow-hidden">
+    <div className="flex flex-1 flex-col overflow-hidden" style={{ background: 'hsl(var(--background))' }}>
       {/* Header */}
-      <div className="flex items-center justify-between border-b border-border px-3 py-2">
-        <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+      <div
+        className="flex shrink-0 items-center justify-between px-3 py-2 border-b"
+        style={{ borderColor: 'hsl(var(--border))' }}
+      >
+        <span className="text-[10px] font-bold uppercase tracking-[0.15em] text-muted-foreground truncate">
           {rootPath.split(/[/\\]/).pop()}
         </span>
-        <div className="flex gap-1">
-          <button className="rounded p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground">
-            <Plus size={12} />
-          </button>
-          <button onClick={handleRefreshTree} className="rounded p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground">
-            <RefreshCw size={12} />
-          </button>
-        </div>
+        <button
+          onClick={handleRefreshTree}
+          className="btn-ghost rounded-md p-1 transition-all duration-300 hover:rotate-180"
+          title="Actualizar árbol"
+        >
+          <RotateCcw size={11} />
+        </button>
       </div>
 
       {/* Tree */}
-      <div className="flex-1 overflow-y-auto py-1">
+      <div className="flex-1 overflow-y-auto scroll-fade py-1">
         {fileTree.map((entry) => (
           <TreeNode
             key={entry.path}
@@ -53,10 +71,15 @@ export function FileTree() {
         ))}
       </div>
 
-      {/* Context info */}
-      <div className="border-t border-border px-3 py-2 text-[11px] text-muted-foreground">
-        Contexto: <span className="text-success">{contextFiles.size}</span> archivo(s)
-      </div>
+      {/* Footer */}
+      {contextFiles.size > 0 && (
+        <div
+          className="shrink-0 border-t px-3 py-2 text-[11px] text-muted-foreground"
+          style={{ borderColor: 'hsl(var(--border))' }}
+        >
+          <span className="text-accent font-semibold">{contextFiles.size}</span> archivo(s) en contexto
+        </div>
+      )}
     </div>
   );
 }
@@ -77,21 +100,22 @@ function TreeNode({ entry, depth, activeFilePath, contextFiles, onToggleContext,
 
   if (entry.kind === 'directory') {
     if (SKIP_DIRS.has(entry.name)) return null;
-
     return (
       <>
         <button
           onClick={() => setExpanded(!expanded)}
-          className={cn(
-            'flex w-full items-center gap-1.5 px-2 py-[5px] text-left text-[12.5px] text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground',
-          )}
-          style={{ paddingLeft: `${12 + depth * 16}px` }}
+          className="flex w-full items-center gap-1.5 py-[5px] text-left text-[12px] transition-colors duration-150 text-muted-foreground hover:text-foreground"
+          style={{
+            paddingLeft: `${10 + depth * 14}px`,
+          }}
+          onMouseEnter={(e) => (e.currentTarget.style.background = 'hsl(var(--surface-hover))')}
+          onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
         >
           <ChevronRight
             size={10}
-            className={cn('shrink-0 transition-transform', expanded && 'rotate-90')}
+            className={cn('shrink-0 transition-transform duration-150', expanded && 'rotate-90')}
           />
-          <span className="shrink-0">{expanded ? '📂' : '📁'}</span>
+          <span className="shrink-0 text-[13px]">{expanded ? '📂' : '📁'}</span>
           <span className="truncate font-medium">{entry.name}</span>
         </button>
         {expanded && entry.children?.map((child) => (
@@ -113,23 +137,28 @@ function TreeNode({ entry, depth, activeFilePath, contextFiles, onToggleContext,
     <button
       onClick={() => onOpenFile(entry.path)}
       className={cn(
-        'group flex w-full items-center gap-1.5 px-2 py-[5px] text-left text-[12.5px] transition-colors',
-        isActive
-          ? 'bg-accent/10 text-accent before:absolute before:left-0 before:top-0.5 before:bottom-0.5 before:w-[2.5px] before:rounded-r before:bg-accent'
-          : 'text-muted-foreground hover:bg-muted/50 hover:text-foreground',
-        isContext && 'bg-success/5',
+        'group relative flex w-full items-center gap-1.5 py-[5px] text-left text-[12px] transition-all duration-150',
+        isActive ? 'bg-accent/8' : 'hover:bg-[hsl(var(--surface-hover))]',
+        isContext && !isActive && 'bg-success/5',
       )}
-      style={{ paddingLeft: `${24 + depth * 16}px` }}
+      style={{
+        paddingLeft: `${20 + depth * 14}px`,
+        color: isActive ? 'hsl(var(--accent))' : 'hsl(var(--muted-foreground))',
+      }}
     >
+      {isActive && (
+        <span
+          className="absolute left-0 top-1 bottom-1 w-[2px] rounded-r-full"
+          style={{ background: 'hsl(var(--accent))' }}
+        />
+      )}
       <span className="shrink-0 text-[13px]">{getFileIcon(entry.name)}</span>
       <span className="flex-1 truncate">{entry.name}</span>
       <span
         onClick={(e) => { e.stopPropagation(); onToggleContext(entry.path); }}
         className={cn(
-          'flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded border text-[8px] opacity-0 transition-all group-hover:opacity-100',
-          isContext
-            ? 'border-success bg-success text-white shadow-sm shadow-success/30'
-            : 'border-border hover:border-success',
+          'mr-2 flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded border text-[8px] opacity-0 transition-all duration-150 group-hover:opacity-100',
+          isContext ? 'border-success bg-success text-white opacity-100' : 'border-border',
         )}
       >
         {isContext ? '✓' : ''}

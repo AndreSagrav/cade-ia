@@ -14,6 +14,7 @@ export interface AIModel {
   cost: { input: number; output: number }; // per 1M tokens
   capabilities: ('code' | 'vision' | 'reasoning')[];
   tier: 'free' | 'paid' | 'premium';
+  dailyLimit?: { type: 'requests' | 'tokens'; value: number; label: string };
 }
 
 export interface ChatMessage {
@@ -24,6 +25,7 @@ export interface ChatMessage {
   model?: string;
   tokens?: { input: number; output: number };
   attachments?: Attachment[];
+  agentChanges?: { path: string; oldContent: string; newContent: string }[];
 }
 
 export interface Attachment {
@@ -58,6 +60,10 @@ export interface OpenFile {
   language: string;
   modified: boolean;
   handle?: FileSystemFileHandle;
+  /** Original content before AI preview (used to diff & revert) */
+  originalContent?: string;
+  /** ID of the PendingChange that owns this preview, if any */
+  previewChangeId?: string;
 }
 
 export interface PendingChange {
@@ -76,6 +82,12 @@ export interface APIKeys {
   nvidia: string;
   deepseek: string;
   openrouter: string;
+}
+
+export interface GitHubAccount {
+  username: string;
+  avatarUrl: string;
+  token: string;
 }
 
 export interface ServerConfig {
@@ -113,4 +125,36 @@ export interface AIStreamRequest {
   system?: string;
   maxTokens?: number;
   stream?: boolean;
+}
+
+// ═══════════════════════════════════════
+// Tool-use / Agentic loop types
+// ═══════════════════════════════════════
+
+export interface ToolDefinition {
+  name: string;
+  description: string;
+  parameters: {
+    type: 'object';
+    properties: Record<string, { type: string; description: string }>;
+    required: string[];
+  };
+}
+
+export interface ToolCall {
+  id: string;
+  name: string;
+  args: Record<string, unknown>;
+  status: 'running' | 'done' | 'error';
+  result?: string;
+  fileChange?: { path: string; content: string; oldContent?: string };
+}
+
+export interface AgentRequest {
+  messages: { role: string; content: string }[];
+  model: string;
+  provider: AIProvider;
+  system: string;
+  projectRoot: string;
+  maxIterations?: number;
 }

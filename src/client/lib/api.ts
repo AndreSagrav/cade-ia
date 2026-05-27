@@ -50,6 +50,13 @@ class ApiClient {
     });
   }
 
+  async listDirectories(path?: string) {
+    return this.request<{ ok: boolean; items: { name: string; path: string }[]; parent: string | null; current: string | null }>('/api/files/list-directories', {
+      method: 'POST',
+      body: JSON.stringify({ path }),
+    });
+  }
+
   streamAI(
     path: string,
     body: object,
@@ -57,6 +64,24 @@ class ApiClient {
   ): { response: Promise<Response>; abort: () => void } {
     const controller = new AbortController();
     const response = fetch(`${BASE_URL}${path}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...headers },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+    return { response, abort: () => controller.abort() };
+  }
+
+  /**
+   * Stream the agentic loop endpoint.
+   * Returns a ReadableStream of SSE events.
+   */
+  streamAgent(
+    body: object,
+    headers: Record<string, string> = {},
+  ): { response: Promise<Response>; abort: () => void } {
+    const controller = new AbortController();
+    const response = fetch(`${BASE_URL}/api/ai/agent`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...headers },
       body: JSON.stringify(body),

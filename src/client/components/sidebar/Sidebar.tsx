@@ -1,45 +1,99 @@
 import { useState } from 'react';
+import { Files, Search, GitBranch, Sparkles, CloudDownload } from 'lucide-react';
 import { FileTree } from './FileTree';
 import { SearchPanel } from './SearchPanel';
 import { GitPanel } from './GitPanel';
+import { SkillsInstaller } from './SkillsInstaller';
 import { cn } from '@/lib/utils';
 
-type SidebarTab = 'files' | 'search' | 'git';
+type SidebarTab = 'files' | 'search' | 'git' | 'skills';
+
+const tabs = [
+  { id: 'files' as SidebarTab, icon: Files, label: 'Archivos' },
+  { id: 'search' as SidebarTab, icon: Search, label: 'Buscar' },
+  { id: 'git' as SidebarTab, icon: GitBranch, label: 'Git' },
+  { id: 'skills' as SidebarTab, icon: CloudDownload, label: 'Instalar Apps/Skills' },
+];
 
 export function Sidebar() {
   const [activeTab, setActiveTab] = useState<SidebarTab>('files');
 
-  const tabs: { id: SidebarTab; label: string; icon: string }[] = [
-    { id: 'files', label: 'Archivos', icon: '📁' },
-    { id: 'search', label: 'Buscar', icon: '🔍' },
-    { id: 'git', label: 'Git', icon: '◉' },
-  ];
-
   return (
-    <div className="flex h-full flex-col overflow-hidden border-r border-border bg-surface/50 backdrop-blur-lg">
-      {/* Tabs */}
-      <div className="flex border-b border-border px-1.5 pt-1">
-        {tabs.map((tab) => (
-          <button
-            key={tab.id}
-            onClick={() => setActiveTab(tab.id)}
-            className={cn(
-              'flex-1 rounded-t-md py-2 text-center text-[10px] font-semibold uppercase tracking-wider transition-colors',
-              activeTab === tab.id
-                ? 'border-b-2 border-accent bg-accent/5 text-accent'
-                : 'text-muted-foreground hover:text-foreground',
-            )}
-          >
-            {tab.icon} {tab.label}
-          </button>
-        ))}
+    <div className="flex h-full overflow-hidden">
+      {/* Icon rail — gradient background */}
+      <div
+        className="flex w-[52px] shrink-0 flex-col items-center gap-1.5 py-3"
+        style={{
+          background: 'linear-gradient(180deg, hsl(267 30% 16%) 0%, hsl(240 21% 11%) 100%)',
+          borderRight: '1px solid hsl(var(--border-strong))',
+        }}
+      >
+        {/* Brand mark */}
+        <div
+          className="mb-3 flex h-8 w-8 items-center justify-center rounded-xl"
+          style={{
+            background: 'linear-gradient(135deg, #89b4fa, #cba6f7, #f5c2e7)',
+            boxShadow: '0 4px 12px rgba(203, 166, 247, 0.3)',
+          }}
+        >
+          <Sparkles size={14} className="text-white" />
+        </div>
+
+        <div className="w-6 h-px mb-1" style={{ background: 'hsl(var(--border-strong))' }} />
+
+        {tabs.map(({ id, icon: Icon, label }) => {
+          const isActive = activeTab === id;
+          return (
+            <button
+              key={id}
+              onClick={() => setActiveTab(id)}
+              title={label}
+              className={cn(
+                'relative flex h-10 w-10 items-center justify-center rounded-xl transition-all duration-200',
+              )}
+              style={
+                isActive
+                  ? {
+                      background: 'hsl(var(--accent) / 0.15)',
+                      color: '#89b4fa',
+                      boxShadow: '0 0 12px hsl(217 92% 76% / 0.15)',
+                    }
+                  : { color: 'hsl(var(--muted-foreground))' }
+              }
+              onMouseEnter={(e) => {
+                if (!isActive) {
+                  e.currentTarget.style.background = 'hsl(237 16% 26%)';
+                  e.currentTarget.style.color = '#cdd6f4';
+                }
+              }}
+              onMouseLeave={(e) => {
+                if (!isActive) {
+                  e.currentTarget.style.background = 'transparent';
+                  e.currentTarget.style.color = 'hsl(var(--muted-foreground))';
+                }
+              }}
+            >
+              {isActive && (
+                <span
+                  className="absolute left-0 top-2 bottom-2 w-[3px] rounded-r-full"
+                  style={{
+                    background: 'linear-gradient(180deg, #89b4fa, #cba6f7)',
+                    boxShadow: '0 0 8px rgba(137, 180, 250, 0.4)',
+                  }}
+                />
+              )}
+              <Icon size={18} strokeWidth={isActive ? 2.2 : 1.5} />
+            </button>
+          );
+        })}
       </div>
 
       {/* Panel content */}
-      <div className="flex flex-1 flex-col overflow-hidden">
+      <div className="flex flex-1 flex-col overflow-hidden" style={{ background: 'hsl(var(--background))' }}>
         {activeTab === 'files' && <FileTree />}
         {activeTab === 'search' && <SearchPanel />}
         {activeTab === 'git' && <GitPanel />}
+        {activeTab === 'skills' && <SkillsInstaller />}
       </div>
     </div>
   );

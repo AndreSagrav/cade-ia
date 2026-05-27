@@ -2,13 +2,21 @@ import { useEffect, useState } from 'react';
 import { Layout } from './components/layout/Layout';
 import { SettingsModal } from './components/settings/SettingsModal';
 import { AuthGate } from './components/auth/AuthModal';
+import { FolderPickerDialog } from './components/layout/FolderPickerDialog';
 import { useSettingsStore } from './store/settings-store';
+import { useEditorStore } from './store/editor-store';
+import { useProject } from './lib/use-project';
 
 export function App() {
   const theme = useSettingsStore((s) => s.theme);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [authenticated, setAuthenticated] = useState(false);
   const [authChecked, setAuthChecked] = useState(false);
+
+  const rootPath = useEditorStore((s) => s.rootPath);
+  const folderPickerOpen = useEditorStore((s) => s.folderPickerOpen);
+  const setFolderPickerOpen = useEditorStore((s) => s.setFolderPickerOpen);
+  const { handleRefreshTree, handleFolderSelected } = useProject();
 
   // Verify saved token on mount
   useEffect(() => {
@@ -47,6 +55,13 @@ export function App() {
     return () => window.removeEventListener('keydown', handler);
   }, []);
 
+  // Auto-refresh file tree on mount if we have a persisted rootPath
+  useEffect(() => {
+    if (authenticated && rootPath) {
+      handleRefreshTree();
+    }
+  }, [authenticated, rootPath, handleRefreshTree]);
+
   if (!authChecked) {
     return (
       <div className="flex h-screen items-center justify-center bg-background">
@@ -63,6 +78,11 @@ export function App() {
     <>
       <Layout onOpenSettings={() => setSettingsOpen(true)} />
       <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+      <FolderPickerDialog 
+        open={folderPickerOpen} 
+        onClose={() => setFolderPickerOpen(false)} 
+        onSelect={handleFolderSelected} 
+      />
     </>
   );
 }

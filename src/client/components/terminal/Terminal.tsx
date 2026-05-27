@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback } from 'react';
-import { TerminalIcon, X, Plus } from 'lucide-react';
+import { TerminalIcon, X, Plus, ChevronRight } from 'lucide-react';
 import { useSettingsStore } from '@/store/settings-store';
 import type { KeyboardEvent } from 'react';
 
@@ -42,41 +42,64 @@ export function Terminal() {
   };
 
   return (
-    <div className="flex h-full flex-col overflow-hidden border-t border-border bg-background">
+    <div className="flex h-full flex-col overflow-hidden" style={{ background: '#11111b' }}>
       {/* Header */}
-      <div className="flex items-center justify-between border-b border-border px-3 py-1.5">
-        <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-          <TerminalIcon size={11} />
-          Terminal
+      <div
+        className="flex items-center justify-between px-4 py-2"
+        style={{ borderBottom: '1px solid hsl(var(--border-strong))' }}
+      >
+        <div className="flex items-center gap-2">
+          <TerminalIcon size={12} style={{ color: '#a6e3a1' }} />
+          <span className="text-[10px] font-bold uppercase tracking-[0.15em]" style={{ color: '#a6e3a1' }}>
+            Terminal
+          </span>
+          <span className="rounded-md px-1.5 py-0.5 text-[9px] font-mono" style={{ background: '#313244', color: '#585b70' }}>
+            bash
+          </span>
         </div>
         <div className="flex items-center gap-1">
-          <button className="rounded p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground">
-            <Plus size={11} />
+          <button
+            className="flex h-6 w-6 items-center justify-center rounded-md transition-all duration-150"
+            style={{ color: '#585b70' }}
+            onMouseEnter={(e) => { e.currentTarget.style.background = '#313244'; e.currentTarget.style.color = '#cdd6f4'; }}
+            onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = '#585b70'; }}
+          >
+            <Plus size={12} />
           </button>
           <button
             onClick={toggleTerminal}
-            className="rounded p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+            className="flex h-6 w-6 items-center justify-center rounded-md transition-all duration-150"
+            style={{ color: '#585b70' }}
+            onMouseEnter={(e) => { e.currentTarget.style.background = '#313244'; e.currentTarget.style.color = '#cdd6f4'; }}
+            onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = '#585b70'; }}
           >
-            <X size={11} />
+            <X size={12} />
           </button>
         </div>
       </div>
 
       {/* Output */}
       <div
-        className="flex-1 overflow-y-auto p-3 font-mono text-[11.5px] leading-5 text-foreground"
+        className="flex-1 overflow-y-auto scroll-fade p-4 font-mono text-[11.5px] leading-6"
+        style={{ color: '#cdd6f4' }}
         onClick={() => inputRef.current?.focus()}
       >
         {output.map((line, i) => (
-          <div key={i} className={line.startsWith('[ERROR]') ? 'text-destructive' : ''}>
+          <div
+            key={i}
+            style={{ color: line.startsWith('[ERROR]') ? '#f38ba8' : line.startsWith('$') ? '#a6e3a1' : '#cdd6f4' }}
+          >
             {line}
           </div>
         ))}
       </div>
 
       {/* Input */}
-      <div className="flex items-center gap-2 border-t border-border px-3 py-2">
-        <span className="font-mono text-xs text-accent">$</span>
+      <div
+        className="flex items-center gap-2 px-4 py-2.5"
+        style={{ borderTop: '1px solid hsl(var(--border-strong))', background: '#181825' }}
+      >
+        <ChevronRight size={12} style={{ color: '#a6e3a1' }} />
         <input
           ref={inputRef}
           type="text"
@@ -84,10 +107,10 @@ export function Terminal() {
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={handleKeyDown}
           placeholder="Escribe un comando..."
-          className="flex-1 bg-transparent font-mono text-xs text-foreground outline-none placeholder:text-muted-foreground"
+          className="flex-1 bg-transparent font-mono text-xs outline-none"
+          style={{ color: '#cdd6f4' }}
         />
       </div>
     </div>
   );
 }
-

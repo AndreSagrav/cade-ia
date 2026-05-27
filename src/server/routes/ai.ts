@@ -3,9 +3,22 @@ import { config } from '../config';
 
 export const aiRouter = Router();
 
+/** Extract a usable Bearer key from header, or fall back to config */
+function resolveBearer(header: string | undefined, fallback: string): string {
+  const h = (header || '').trim();
+  // "Bearer " alone or empty → use fallback
+  if (!h || h === 'Bearer' || h === 'Bearer ') return `Bearer ${fallback}`;
+  return h;
+}
+
+function resolveRaw(header: string | undefined, fallback: string): string {
+  const h = (header || '').trim();
+  return h || fallback;
+}
+
 // Claude (Anthropic) proxy
 aiRouter.post('/claude', async (req: Request, res: Response) => {
-  const apiKey = req.headers['x-api-key'] as string || config.anthropicApiKey;
+  const apiKey = resolveRaw(req.headers['x-api-key'] as string, config.anthropicApiKey);
   if (!apiKey) return res.status(401).json({ error: 'No Anthropic API key configured' });
 
   try {
@@ -45,8 +58,8 @@ aiRouter.post('/claude', async (req: Request, res: Response) => {
 
 // OpenAI proxy
 aiRouter.post('/openai', async (req: Request, res: Response) => {
-  const apiKey = req.headers['authorization'] as string || `Bearer ${config.openaiApiKey}`;
-  if (!apiKey || apiKey === 'Bearer ') return res.status(401).json({ error: 'No OpenAI API key' });
+  const apiKey = resolveBearer(req.headers['authorization'] as string, config.openaiApiKey);
+  if (apiKey === 'Bearer ') return res.status(401).json({ error: 'No OpenAI API key' });
 
   try {
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
@@ -113,8 +126,8 @@ aiRouter.post('/gemini', async (req: Request, res: Response) => {
 
 // DeepSeek proxy
 aiRouter.post('/deepseek', async (req: Request, res: Response) => {
-  const apiKey = req.headers['authorization'] as string || `Bearer ${config.deepseekApiKey}`;
-  if (!apiKey || apiKey === 'Bearer ') return res.status(401).json({ error: 'No DeepSeek API key' });
+  const apiKey = resolveBearer(req.headers['authorization'] as string, config.deepseekApiKey);
+  if (apiKey === 'Bearer ') return res.status(401).json({ error: 'No DeepSeek API key' });
 
   try {
     const response = await fetch('https://api.deepseek.com/chat/completions', {
@@ -147,8 +160,8 @@ aiRouter.post('/deepseek', async (req: Request, res: Response) => {
 
 // NVIDIA NIM proxy (OpenAI-compatible API)
 aiRouter.post('/nvidia', async (req: Request, res: Response) => {
-  const apiKey = req.headers['authorization'] as string || `Bearer ${config.nvidiaApiKey}`;
-  if (!apiKey || apiKey === 'Bearer ') return res.status(401).json({ error: 'No NVIDIA API key' });
+  const apiKey = resolveBearer(req.headers['authorization'] as string, config.nvidiaApiKey);
+  if (apiKey === 'Bearer ') return res.status(401).json({ error: 'No NVIDIA API key' });
 
   try {
     const response = await fetch('https://integrate.api.nvidia.com/v1/chat/completions', {
@@ -181,8 +194,8 @@ aiRouter.post('/nvidia', async (req: Request, res: Response) => {
 
 // OpenRouter proxy
 aiRouter.post('/openrouter', async (req: Request, res: Response) => {
-  const apiKey = req.headers['authorization'] as string || `Bearer ${config.openrouterApiKey}`;
-  if (!apiKey || apiKey === 'Bearer ') return res.status(401).json({ error: 'No OpenRouter API key' });
+  const apiKey = resolveBearer(req.headers['authorization'] as string, config.openrouterApiKey);
+  if (apiKey === 'Bearer ') return res.status(401).json({ error: 'No OpenRouter API key' });
 
   try {
     const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {

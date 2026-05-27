@@ -9,9 +9,12 @@ import { filesRouter } from './routes/files';
 import { aiRouter } from './routes/ai';
 import { terminalRouter } from './routes/terminal';
 import { gitRouter } from './routes/git';
+import { githubRouter } from './routes/github';
 import { authRouter } from './routes/auth';
+import { agentRouter } from './routes/agent-loop';
 
 const app = express();
+app.set('trust proxy', 1);
 const server = createServer(app);
 
 // Security middleware
@@ -37,7 +40,9 @@ app.use('/api/files', filesRouter);
 app.use('/api/ai', aiRouter);
 app.use('/api/terminal', terminalRouter);
 app.use('/api/git', gitRouter);
+app.use('/api/github', githubRouter);
 app.use('/api/auth', authRouter);
+app.use('/api/ai/agent', agentRouter);
 
 // Health check
 app.get('/api/health', (_req, res) => {

@@ -1,5 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSync } from 'fs';
+import { execSync } from 'child_process';
 import { join, resolve, dirname, relative } from 'path';
 
 export const filesRouter = Router();
@@ -100,6 +101,60 @@ filesRouter.post('/resolve', (req: Request, res: Response) => {
   }
 
   res.json({ path: name, guessed: true });
+});
+
+// List directories for folder picker
+filesRouter.post('/list-directories', (req: Request, res: Response) => {
+  const { path: dirPath } = req.body;
+
+  try {
+    if (!dirPath) {
+      // Return root drives for Windows, or / for Unix
+      if (process.platform === 'win32') {
+        try {
+          const output = execSync('wmic logicaldisk get name', { encoding: 'utf-8' });
+          const drives = output.split('\n')
+            .map(line => line.trim())
+            .filter(line => line.length === 2 && line.endsWith(':'))
+            .map(drive => drive + '\\');
+          return res.json({ ok: true, items: drives.map(d => ({ name: d, path: d })), parent: null });
+        } catch {
+          // fallback
+          const drives = ['C:\\', 'D:\\', 'E:\\'].filter(d => existsSync(d));
+          return res.json({ ok: true, items: drives.map(d => ({ name: d, path: d })), parent: null });
+        }
+      } else {
+        return res.json({ ok: true, items: [{ name: '/', path: '/' }], parent: null });
+      }
+    }
+
+    if (!existsSync(dirPath)) {
+      return res.status(404).json({ error: 'Directory not found' });
+    }
+
+    const stat = statSync(dirPath);
+    if (!stat.isDirectory()) {
+      return res.status(400).json({ error: 'Path is not a directory' });
+    }
+
+    const entries = readdirSync(dirPath, { withFileTypes: true });
+    const items = entries
+      .filter(e => e.isDirectory())
+      .filter(e => !e.name.startsWith('.') && e.name !== 'node_modules')
+      .map(e => ({
+        name: e.name,
+        path: join(dirPath, e.name)
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+
+    const parent = dirname(dirPath);
+    const hasParent = parent && parent !== dirPath && existsSync(parent);
+
+    res.json({ ok: true, items, parent: hasParent ? parent : null, current: dirPath });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'Failed to list directories';
+    res.status(500).json({ error: message });
+  }
 });
 
 function buildTree(dir: string, depth: number, maxDepth: number): object[] {

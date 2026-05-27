@@ -9,9 +9,10 @@ export function useProject() {
     setRootPath, setRootHandle, setFileTree,
     openFile, setActiveFile, rootPath,
     openFiles, activeFilePath, markFileSaved,
+    setFolderPickerOpen
   } = useEditorStore();
 
-  /** Open folder using File System Access API (browser) or fallback prompt */
+  /** Open folder using File System Access API (browser) or fallback to visual picker */
   const handleOpenFolder = useCallback(async () => {
     // Try File System Access API first (works in Chromium-based browsers)
     if ('showDirectoryPicker' in window) {
@@ -31,17 +32,22 @@ export function useProject() {
         if (e.name !== 'AbortError') console.error('Failed to open folder:', e);
       }
     } else {
-      // Fallback: prompt for path
-      const folderName = prompt('Nombre o ruta de la carpeta del proyecto:');
-      if (!folderName) return;
+      // Fallback: visual folder picker
+      setFolderPickerOpen(true);
+    }
+  }, [setRootPath, setRootHandle, setFileTree, setFolderPickerOpen]);
 
-      const resolved = await api.resolveFolder(folderName);
+  /** Called by FolderPickerDialog when a path is selected */
+  const handleFolderSelected = useCallback(async (path: string) => {
+    try {
+      const resolved = await api.resolveFolder(path);
       setRootPath(resolved.path);
-
       const treeResult = await api.getTree({ root: resolved.path });
       setFileTree(treeResult.items as FileEntry[]);
+    } catch (e: any) {
+      console.error('Failed to open folder:', e.message);
     }
-  }, [setRootPath, setRootHandle, setFileTree]);
+  }, [setRootPath, setFileTree]);
 
   /** Refresh current file tree */
   const handleRefreshTree = useCallback(async () => {
@@ -96,6 +102,7 @@ export function useProject() {
 
   return {
     handleOpenFolder,
+    handleFolderSelected,
     handleRefreshTree,
     handleOpenFile,
     handleSaveFile,
