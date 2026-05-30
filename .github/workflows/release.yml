@@ -8,7 +8,7 @@ on:
 jobs:
   release:
     name: Build & Release Windows App
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
 
     permissions:
       contents: write
@@ -30,12 +30,14 @@ jobs:
         run: npm ci
 
       - name: Configure Git
+        shell: bash
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
 
       - name: Bump Version
         id: bump_version
+        shell: bash
         run: |
           # Bump the version in package.json (patch level, e.g. 2.0.0 -> 2.0.1)
           npm version patch -m "ci: bump version to %s [skip ci]"
