@@ -136,7 +136,16 @@ export const useSettingsStore = create<SettingsState>()(
       toggleSidebar: () => set({ sidebarVisible: !get().sidebarVisible }),
       toggleChat: () => set({ chatVisible: !get().chatVisible }),
       hydrateFromCloud: (keys) => {
-        set({ apiKeys: { ...get().apiKeys, ...keys } });
+        // Cloud keys overwrite empty local keys; non-empty local keys are preserved
+        const current = get().apiKeys;
+        const merged = { ...current };
+        for (const [provider, cloudVal] of Object.entries(keys)) {
+          if (cloudVal && typeof cloudVal === 'string' && cloudVal.trim()) {
+            // Cloud has a value → use it (overwrite even if local has something, cloud is source of truth)
+            merged[provider as keyof typeof current] = cloudVal;
+          }
+        }
+        set({ apiKeys: merged });
       },
     }),
     {

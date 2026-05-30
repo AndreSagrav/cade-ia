@@ -21,24 +21,31 @@ export function App() {
   // Verify session on mount via Supabase
   useEffect(() => {
     import('./lib/supabase').then(({ supabase }) => {
-      supabase.auth.getSession().then(({ data: { session } }) => {
-        if (session) {
+      // Use getUser() instead of getSession() — getUser() always returns fresh metadata from the server
+      supabase.auth.getUser().then(({ data: { user } }) => {
+        if (user) {
           setAuthenticated(true);
-          const keys = session.user.user_metadata?.codeai_keys;
-          if (keys) {
+          const keys = user.user_metadata?.codeai_keys;
+          if (keys && typeof keys === 'object') {
             useSettingsStore.getState().hydrateFromCloud(keys);
+            console.log('[CodeAI] ✅ API keys cargadas desde Supabase:', Object.keys(keys).filter(k => keys[k]).join(', ') || 'ninguna');
           }
         }
         setAuthChecked(true);
       });
 
       // Listen for auth changes to sync state
-      supabase.auth.onAuthStateChange((event, session) => {
+      supabase.auth.onAuthStateChange(async (event, session) => {
         if (event === 'SIGNED_IN' && session) {
           setAuthenticated(true);
-          const keys = session.user.user_metadata?.codeai_keys;
-          if (keys) {
-            useSettingsStore.getState().hydrateFromCloud(keys);
+          // Fetch fresh user data to get the latest keys
+          const { data: { user } } = await supabase.auth.getUser();
+          if (user) {
+            const keys = user.user_metadata?.codeai_keys;
+            if (keys && typeof keys === 'object') {
+              useSettingsStore.getState().hydrateFromCloud(keys);
+              console.log('[CodeAI] ✅ API keys sincronizadas desde Supabase al iniciar sesión');
+            }
           }
         } else if (event === 'SIGNED_OUT') {
           setAuthenticated(false);

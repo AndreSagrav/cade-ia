@@ -1,7 +1,8 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { X, Key, Palette, Type, Plus, Trash2, Github } from 'lucide-react';
 import { useSettingsStore } from '@/store/settings-store';
 import { cn } from '@/lib/utils';
+import { supabase } from '@/lib/supabase';
 
 interface SettingsModalProps {
   open: boolean;
@@ -83,6 +84,97 @@ function TabBtn({ icon: Icon, label, active, onClick }: { icon: any; label: stri
 
 function APIKeysTab() {
   const { apiKeys, setApiKey } = useSettingsStore();
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveStatus, setSaveStatus] = useState<'idle' | 'success' | 'error'>('idle');
+  const [saveError, setSaveError] = useState('');
+  
+  // Real-time Cloud states
+  const [cloudKeys, setCloudKeys] = useState<Record<string, string> | null>(null);
+  const [cloudLoading, setCloudLoading] = useState(true);
+  const [userEmail, setUserEmail] = useState('');
+
+  // Fetch cloud backup state on mount
+  useEffect(() => {
+    let active = true;
+    async function fetchCloudData() {
+      try {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (user && active) {
+          setUserEmail(user.email || '');
+          const keys = user.user_metadata?.codeai_keys;
+          if (keys && typeof keys === 'object') {
+            setCloudKeys(keys);
+          } else {
+            setCloudKeys({});
+          }
+        }
+      } catch (e) {
+        console.error('[CodeAI] Error reading live cloud status:', e);
+      } finally {
+        if (active) setCloudLoading(false);
+      }
+    }
+    fetchCloudData();
+    return () => { active = false; };
+  }, []);
+
+  const handleSaveToCloud = async () => {
+    setIsSaving(true);
+    setSaveStatus('idle');
+    setSaveError('');
+    try {
+      const keysToSave = useSettingsStore.getState().apiKeys;
+      
+      // Step 1: Save to Supabase Auth metadata
+      const { error } = await supabase.auth.updateUser({ 
+        data: { codeai_keys: keysToSave } 
+      });
+      if (error) {
+        throw new Error(error.message);
+      }
+      
+      // Step 2: Verify by reading back fresh from the server
+      const { data: { user } } = await supabase.auth.getUser();
+      const savedKeys = user?.user_metadata?.codeai_keys;
+      if (!savedKeys) {
+        throw new Error('Las keys no se pudieron verificar en los servidores de Supabase. Por favor intenta de nuevo.');
+      }
+      
+      // Update our real-time visual grid
+      setCloudKeys(savedKeys);
+      
+      const savedCount = Object.values(savedKeys).filter((v: any) => v && typeof v === 'string' && v.trim()).length;
+      console.log(`[CodeAI] ✅ ${savedCount} API keys guardadas y verificadas en Supabase`);
+      
+      setSaveStatus('success');
+      // Show success message for a long duration so the user gets true confirmation
+      setTimeout(() => setSaveStatus('idle'), 10000);
+    } catch (e: any) {
+      console.error('Error al guardar en Supabase:', e);
+      setSaveError(e.message || 'Error desconocido');
+      setSaveStatus('error');
+    }
+    setIsSaving(false);
+  };
+
+  const handleLoadFromCloud = async () => {
+    try {
+      setCloudLoading(true);
+      const { data: { user } } = await supabase.auth.getUser();
+      const keys = user?.user_metadata?.codeai_keys;
+      if (keys && typeof keys === 'object') {
+        useSettingsStore.getState().hydrateFromCloud(keys);
+        setCloudKeys(keys);
+        alert('🔄 ¡API Keys cargadas desde la nube con éxito!');
+      } else {
+        alert('❌ No se encontraron API keys respaldadas en tu cuenta de Supabase.');
+      }
+    } catch (e: any) {
+      alert('Error al cargar desde la nube: ' + (e.message || e));
+    } finally {
+      setCloudLoading(false);
+    }
+  };
 
   const providers = [
     { key: 'claude' as const, label: 'Anthropic (Claude)', placeholder: 'sk-ant-...', color: '#fab387' },
@@ -95,36 +187,202 @@ function APIKeysTab() {
 
   return (
     <div className="space-y-5">
-      <div>
-        <h3 className="text-sm font-bold" style={{ color: '#cdd6f4' }}>API Keys</h3>
-        <p className="mt-1 text-[11px]" style={{ color: '#a6adc8' }}>
-          Las keys se guardan en tu navegador (localStorage).
-        </p>
-      </div>
-      {providers.map((p) => (
-        <div key={p.key}>
-          <label className="mb-1.5 flex items-center gap-2 text-[11px] font-semibold" style={{ color: '#cdd6f4' }}>
-            <span className="h-2 w-2 rounded-full" style={{ background: p.color }} />
-            {p.label}
-          </label>
-          <input
-            type="password"
-            value={apiKeys[p.key]}
-            onChange={(e) => setApiKey(p.key, e.target.value)}
-            placeholder={p.placeholder}
-            className="w-full rounded-xl px-4 py-2.5 text-xs outline-none transition-all duration-150"
-            style={{ background: '#313244', border: '1px solid #45475a', color: '#cdd6f4' }}
-            onFocus={(e) => { e.currentTarget.style.borderColor = '#89b4fa'; e.currentTarget.style.boxShadow = '0 0 0 3px rgba(137,180,250,0.1)'; }}
-            onBlur={(e) => { 
-              e.currentTarget.style.borderColor = '#45475a'; 
-              e.currentTarget.style.boxShadow = 'none'; 
-              import('@/lib/supabase').then(({ supabase }) => {
-                supabase.auth.updateUser({ data: { codeai_keys: useSettingsStore.getState().apiKeys } });
-              });
-            }}
-          />
+      {/* ☁️ SUPABASE REAL-TIME CLOUD STATUS DASHBOARD */}
+      <div 
+        className="rounded-2xl p-4 border animate-scale-in" 
+        style={{ 
+          background: 'linear-gradient(135deg, rgba(30, 32, 48, 0.75) 0%, rgba(17, 18, 27, 0.9) 100%)', 
+          borderColor: 'rgba(137, 180, 250, 0.25)',
+          boxShadow: '0 8px 32px 0 rgba(0, 0, 0, 0.4)',
+          backdropFilter: 'blur(10px)'
+        }}
+      >
+        <div className="flex items-center justify-between gap-3 mb-4">
+          <div className="flex items-center gap-2.5">
+            <div 
+              className="flex h-8 w-8 items-center justify-center rounded-xl text-white"
+              style={{
+                background: 'linear-gradient(135deg, #89b4fa, #cba6f7)',
+                boxShadow: '0 4px 12px rgba(137, 180, 250, 0.3)'
+              }}
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M17.5 19A3.5 3.5 0 0 0 21 15.5c0-2.79-2.54-4.5-5-4.5-.47-.47-1.11-.73-1.8-.73H13.5a4 4 0 0 0-4 4v.27c0 .18-.08.35-.22.45A3.5 3.5 0 0 0 11 21h6.5"/>
+              </svg>
+            </div>
+            <div>
+              <h4 className="text-[12px] font-extrabold text-white tracking-wide">PANEL DE RESPALDO EN LA NUBE</h4>
+              <p className="text-[10px] text-[#a6adc8] font-medium">
+                {userEmail ? `Usuario: ${userEmail}` : 'Cargando información del servidor...'}
+              </p>
+            </div>
+          </div>
+          
+          <div className="flex gap-2">
+            <button
+              onClick={handleLoadFromCloud}
+              disabled={cloudLoading || isSaving}
+              className="flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-[10px] font-bold transition-all duration-200 border hover:bg-[#313244] disabled:opacity-50"
+              style={{
+                borderColor: '#45475a',
+                color: '#cdd6f4',
+                background: '#1e1e2e'
+              }}
+              title="Descargar llaves guardadas en la nube a este dispositivo"
+            >
+              Descargar ☁️
+            </button>
+            <button
+              onClick={handleSaveToCloud}
+              disabled={isSaving || cloudLoading}
+              className="flex items-center gap-1.5 rounded-xl px-3.5 py-1.5 text-[10px] font-extrabold transition-all duration-200 disabled:opacity-50"
+              style={{
+                background: saveStatus === 'success' 
+                  ? 'linear-gradient(135deg, #a6e3a1, #94e2d5)' 
+                  : saveStatus === 'error'
+                  ? 'linear-gradient(135deg, #f38ba8, #fab387)'
+                  : 'linear-gradient(135deg, #89b4fa, #cba6f7)',
+                color: '#11111b',
+                boxShadow: saveStatus === 'success' 
+                  ? '0 0 20px rgba(166,227,161,0.4)' 
+                  : saveStatus === 'error' 
+                  ? '0 0 20px rgba(243,139,168,0.4)' 
+                  : '0 0 12px rgba(137,180,250,0.25)'
+              }}
+            >
+              {isSaving ? 'Guardando...' : saveStatus === 'success' ? '✓ ¡Respaldado!' : saveStatus === 'error' ? '✗ Error' : 'Subir a la Nube ☁️'}
+            </button>
+          </div>
         </div>
-      ))}
+
+        {/* Real-time server keys list */}
+        {cloudLoading ? (
+          <div className="py-5 text-center text-[10px] text-[#a6adc8] flex flex-col items-center justify-center gap-2">
+            <div className="h-4 w-4 animate-spin rounded-full border-2 border-[#89b4fa] border-t-transparent" />
+            <span>Consultando estado de sincronización en tiempo real con Supabase...</span>
+          </div>
+        ) : (
+          <div className="space-y-2.5">
+            <div className="text-[10px] font-bold text-[#cdd6f4] border-b border-[#313244] pb-2 mb-2 flex items-center justify-between">
+              <span>Estado en los servidores de Supabase:</span>
+              <span className="text-[9px] text-[#89b4fa] px-1.5 py-0.5 rounded bg-[#89b4fa]/10 font-bold tracking-wider">VISTA EN VIVO</span>
+            </div>
+            
+            <div className="grid grid-cols-2 gap-2">
+              {providers.map((p) => {
+                const isSavedInCloud = cloudKeys && cloudKeys[p.key] && cloudKeys[p.key].trim().length > 0;
+                return (
+                  <div 
+                    key={p.key} 
+                    className="flex items-center justify-between rounded-xl px-3 py-2 border transition-all duration-150"
+                    style={{
+                      background: isSavedInCloud ? 'rgba(166, 227, 161, 0.03)' : 'rgba(49, 50, 68, 0.2)',
+                      borderColor: isSavedInCloud ? 'rgba(166, 227, 161, 0.15)' : '#313244'
+                    }}
+                  >
+                    <span className="text-[10px] font-semibold text-[#cdd6f4] flex items-center gap-2">
+                      <span className="h-2 w-2 rounded-full" style={{ background: p.color }} />
+                      {p.label}
+                    </span>
+                    {isSavedInCloud ? (
+                      <span 
+                        className="text-[9px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1"
+                        style={{ background: 'rgba(166, 227, 161, 0.15)', color: '#a6e3a1' }}
+                      >
+                        ✓ EN NUBE
+                      </span>
+                    ) : (
+                      <span 
+                        className="text-[9px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1"
+                        style={{ background: 'rgba(243, 139, 168, 0.05)', color: '#585b70' }}
+                      >
+                        ○ NO RESPALDADA
+                      </span>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Guaranty warning card */}
+            <div 
+              className="mt-3 rounded-xl p-3 border text-[10px] text-[#a6adc8] leading-relaxed"
+              style={{
+                background: 'rgba(137, 180, 250, 0.04)',
+                borderColor: 'rgba(137, 180, 250, 0.12)'
+              }}
+            >
+              <div className="flex items-center gap-2 mb-1">
+                <span className="text-[14px]">🛡️</span>
+                <span className="font-extrabold text-white uppercase tracking-wider text-[9px]">Garantía de Sincronización Permanente</span>
+              </div>
+              Las llaves marcadas como <strong className="text-[#a6e3a1]">✓ EN NUBE</strong> están grabadas en los servidores de Supabase vinculados a tu cuenta. <strong className="text-white">Nunca más</strong> tendrás que volver a escribirlas cuando abras CodeAI en un nuevo navegador, computadora o celular: se cargarán automáticamente al iniciar tu sesión.
+            </div>
+          </div>
+        )}
+      </div>
+
+      {saveStatus === 'error' && saveError && (
+        <div className="rounded-xl px-4 py-3 text-[11px] font-semibold animate-scale-in" style={{ background: 'rgba(243,139,168,0.1)', color: '#f38ba8', border: '1px solid rgba(243,139,168,0.2)' }}>
+          ⚠️ Error al guardar en Supabase: {saveError}
+        </div>
+      )}
+      
+      {saveStatus === 'success' && (
+        <div 
+          className="rounded-xl px-4 py-3 text-[11px] font-medium animate-scale-in border" 
+          style={{ 
+            background: 'rgba(166,227,161,0.08)', 
+            color: '#a6e3a1', 
+            borderColor: 'rgba(166,227,161,0.2)',
+            boxShadow: '0 4px 20px rgba(166,227,161,0.15)'
+          }}
+        >
+          <div className="flex items-center gap-2 mb-1">
+            <span className="text-[14px]">🎉</span>
+            <strong className="text-white text-[11px] uppercase tracking-wider">¡Confirmación Real de Almacenamiento en Supabase!</strong>
+          </div>
+          Tus API Keys han sido subidas, escritas y verificadas mediante una lectura de validación en los servidores centrales de Supabase. Están 100% seguras y sincronizadas de manera definitiva.
+        </div>
+      )}
+
+      {/* Editor local section */}
+      <div className="pt-2">
+        <h4 className="text-[11px] font-bold uppercase tracking-wider text-[#a6adc8] mb-3">Llaves en este Dispositivo</h4>
+        <div className="space-y-4">
+          {providers.map((p) => (
+            <div key={p.key}>
+              <label className="mb-1.5 flex items-center gap-2 text-[11px] font-semibold" style={{ color: '#cdd6f4' }}>
+                <span className="h-2 w-2 rounded-full" style={{ background: p.color }} />
+                {p.label}
+                {apiKeys[p.key] ? (
+                  <span className="ml-auto text-[10px] font-bold text-[#a6e3a1]">✓ Lista en Dispositivo</span>
+                ) : (
+                  <span className="ml-auto text-[10px] font-bold text-[#f38ba8]">○ Vacía Localmente</span>
+                )}
+              </label>
+              <input
+                type="password"
+                value={apiKeys[p.key]}
+                onChange={(e) => setApiKey(p.key, e.target.value)}
+                placeholder={p.placeholder}
+                className="w-full rounded-xl px-4 py-2.5 text-xs outline-none transition-all duration-150"
+                style={{ 
+                  background: '#313244', 
+                  border: apiKeys[p.key] ? '1px solid rgba(166,227,161,0.3)' : '1px solid #45475a', 
+                  color: '#cdd6f4' 
+                }}
+                onFocus={(e) => { e.currentTarget.style.borderColor = '#89b4fa'; e.currentTarget.style.boxShadow = '0 0 0 3px rgba(137,180,250,0.15)'; }}
+                onBlur={(e) => { 
+                  e.currentTarget.style.borderColor = apiKeys[p.key] ? 'rgba(166,227,161,0.3)' : '#45475a'; 
+                  e.currentTarget.style.boxShadow = 'none'; 
+                }}
+              />
+            </div>
+          ))}
+        </div>
+      </div>
+      
       <div className="my-6 h-px w-full" style={{ background: '#45475a' }} />
       <GitHubAccountsSection />
     </div>

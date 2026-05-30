@@ -35,6 +35,8 @@ aiRouter.post('/claude', async (req: Request, res: Response) => {
     // Stream the response back
     res.status(response.status);
     res.setHeader('Content-Type', response.headers.get('content-type') ?? 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
     if (response.body) {
       const reader = response.body.getReader();
       const pump = async () => {
@@ -73,6 +75,8 @@ aiRouter.post('/openai', async (req: Request, res: Response) => {
 
     res.status(response.status);
     res.setHeader('Content-Type', response.headers.get('content-type') ?? 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
     if (response.body) {
       const reader = response.body.getReader();
       while (true) {
@@ -107,6 +111,8 @@ aiRouter.post('/gemini', async (req: Request, res: Response) => {
 
     res.status(response.status);
     res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
     if (response.body) {
       const reader = response.body.getReader();
       while (true) {
@@ -141,6 +147,8 @@ aiRouter.post('/deepseek', async (req: Request, res: Response) => {
 
     res.status(response.status);
     res.setHeader('Content-Type', response.headers.get('content-type') ?? 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
     if (response.body) {
       const reader = response.body.getReader();
       while (true) {
@@ -175,6 +183,8 @@ aiRouter.post('/nvidia', async (req: Request, res: Response) => {
 
     res.status(response.status);
     res.setHeader('Content-Type', response.headers.get('content-type') ?? 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
     if (response.body) {
       const reader = response.body.getReader();
       while (true) {
@@ -211,6 +221,8 @@ aiRouter.post('/openrouter', async (req: Request, res: Response) => {
 
     res.status(response.status);
     res.setHeader('Content-Type', response.headers.get('content-type') ?? 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
     if (response.body) {
       const reader = response.body.getReader();
       while (true) {

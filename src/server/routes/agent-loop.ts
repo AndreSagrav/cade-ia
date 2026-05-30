@@ -152,9 +152,9 @@ async function executeTool(
         if (!p) return { result: 'Error: ruta no permitida (path traversal)' };
         if (!existsSync(p)) return { result: `Error: archivo no encontrado: ${args.path}` };
         const content = readFileSync(p, 'utf-8');
-        // Cap at 60k chars to avoid token overflow
-        if (content.length > 60000) {
-          return { result: content.slice(0, 60000) + '\n\n... (truncado, archivo muy grande)' };
+        // Cap at 250k chars to avoid token overflow
+        if (content.length > 250000) {
+          return { result: content.slice(0, 250000) + '\n\n... (truncado, archivo muy grande)' };
         }
         return { result: content };
       }
@@ -457,9 +457,23 @@ function openaiAdapter(endpoint: string, extra?: Record<string, string>): Provid
         return { role: m.role, content: m.content, name: m.name, tool_calls: m.tool_calls, tool_call_id: m.tool_call_id, reasoning_content: m.reasoning_content };
       });
 
+      // Prepend the system prompt directly to the first user message
+      // This is a bulletproof way to ensure open-source models (like Qwen on NVIDIA)
+      // that ignore { role: 'system' } always parse the IDE instructions and project tree.
+      const firstUserMsgIndex = formattedMessages.findIndex(m => m.role === 'user');
+      if (firstUserMsgIndex !== -1) {
+        const originalContent = formattedMessages[firstUserMsgIndex].content;
+        if (typeof originalContent === 'string') {
+          formattedMessages[firstUserMsgIndex].content = `${system}\n\n---\n\n${originalContent}`;
+        }
+      } else {
+        // Fallback if no user message exists yet (e.g. initial ping)
+        formattedMessages.unshift({ role: 'user', content: `${system}\n\n---\n\nPor favor inicia la sesión.` });
+      }
+
       return {
         model,
-        messages: [{ role: 'system', content: system }, ...formattedMessages],
+        messages: formattedMessages,
         tools: TOOL_DEFS.map((t) => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.parameters } })),
         max_tokens: 8192,
       };
@@ -634,6 +648,96 @@ function resolveApiKey(provider: AIProvider, clientKey?: string): string {
 }
 
 // ═══════════════════════════════════════
+// Fetch helper with exponential backoff retry for 429 Rate Limits
+// ═══════════════════════════════════════
+
+async function fetchWithRetry(
+  url: string,
+  options: RequestInit,
+  onRetry?: (attempt: number, delayMs: number, errorMsg: string) => void,
+  onHeartbeat?: () => void
+): Promise<Response> {
+  let attempt = 0;
+  const maxAttempts = 10;
+  let delay = 2000;
+
+  while (true) {
+    attempt++;
+    try {
+      const response = await fetch(url, options);
+
+      if (response.status === 429 && attempt < maxAttempts) {
+        const errText = await response.clone().text().catch(() => '');
+        const errMsg = errText || response.statusText || 'Too Many Requests';
+        
+        let waitMs = delay;
+        const retryAfter = response.headers.get('retry-after') || response.headers.get('x-retry-after');
+        if (retryAfter) {
+          const seconds = parseInt(retryAfter, 10);
+          if (!isNaN(seconds) && seconds > 0) {
+            waitMs = seconds * 1000;
+          }
+        } else {
+          try {
+            const errJson = JSON.parse(errMsg);
+            if (errJson.error && typeof errJson.error.message === 'string') {
+              const match = errJson.error.message.match(/try again in ([0-9.]+)\s*s/i);
+              if (match) {
+                waitMs = parseFloat(match[1]) * 1000;
+              }
+            }
+          } catch {}
+        }
+        
+        const actualWait = Math.max(waitMs, delay);
+
+        if (onRetry) {
+          onRetry(attempt, actualWait, errMsg);
+        }
+
+        // Wait with a countdown loop to keep the SSE connection alive and feed visual updates
+        const interval = 2000;
+        let remaining = actualWait;
+        while (remaining > 0) {
+          const chunk = Math.min(interval, remaining);
+          await new Promise((resolve) => setTimeout(resolve, chunk));
+          remaining -= chunk;
+          if (remaining > 0 && onHeartbeat) {
+            onHeartbeat();
+          }
+        }
+        
+        delay = Math.min(delay * 2, 30000);
+        continue;
+      }
+
+      return response;
+    } catch (err: any) {
+      if (attempt < maxAttempts) {
+        if (onRetry) {
+          onRetry(attempt, delay, err.message || 'Network Error');
+        }
+
+        const interval = 2000;
+        let remaining = delay;
+        while (remaining > 0) {
+          const chunk = Math.min(interval, remaining);
+          await new Promise((resolve) => setTimeout(resolve, chunk));
+          remaining -= chunk;
+          if (remaining > 0 && onHeartbeat) {
+            onHeartbeat();
+          }
+        }
+
+        delay = Math.min(delay * 2, 30000);
+        continue;
+      }
+      throw err;
+    }
+  }
+}
+
+// ═══════════════════════════════════════
 // Agent loop endpoint
 // ═══════════════════════════════════════
 
@@ -688,11 +792,26 @@ agentRouter.post('/', async (req: Request, res: Response) => {
 
       sendEvent('status', { type: 'thinking', iteration });
 
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: fetchHeaders,
-        body: JSON.stringify(body),
-      });
+      const response = await fetchWithRetry(
+        url,
+        {
+          method: 'POST',
+          headers: fetchHeaders,
+          body: JSON.stringify(body),
+        },
+        (attempt, delayMs, errMsg) => {
+          sendEvent('status', {
+            type: 'rate_limit',
+            attempt,
+            maxAttempts: 10,
+            delay: delayMs,
+            message: errMsg,
+          });
+        },
+        () => {
+          sendEvent('status', { type: 'heartbeat' });
+        }
+      );
 
       if (!response.ok) {
         const errText = await response.text();
@@ -702,6 +821,67 @@ agentRouter.post('/', async (req: Request, res: Response) => {
 
       const json = await response.json();
       const parsed = adapter.parseResponse(json);
+
+      // Fallback: If no native tool calls were returned, check if the response contains XML tool call tags!
+      if ((!parsed.toolCalls || parsed.toolCalls.length === 0) && parsed.text) {
+        const xmlToolCalls: any[] = [];
+        
+        // 1. read_file: <read_file path="..." /> or <read_file path="..."></read_file>
+        const readFileRegex = /<read_file\s+path=["']([^"']+)["']\s*(?:\/>|>\s*<\/read_file>)/gi;
+        let match;
+        while ((match = readFileRegex.exec(parsed.text)) !== null) {
+          xmlToolCalls.push({
+            id: `xml-read-${Date.now()}-${xmlToolCalls.length}`,
+            name: 'read_file',
+            args: { path: match[1] }
+          });
+        }
+
+        // 2. write_file: <write_file path="..." >content</write_file>
+        const writeFileRegex = /<write_file\s+path=["']([^"']+)["']\s*>([\s\S]*?)<\/write_file>/gi;
+        while ((match = writeFileRegex.exec(parsed.text)) !== null) {
+          xmlToolCalls.push({
+            id: `xml-write-${Date.now()}-${xmlToolCalls.length}`,
+            name: 'write_file',
+            args: { path: match[1], content: match[2] }
+          });
+        }
+
+        // 3. list_files: <list_files path="..." />
+        const listFilesRegex = /<list_files\s+path=["']([^"']+)["']\s*(?:\/>|>\s*<\/list_files>)/gi;
+        while ((match = listFilesRegex.exec(parsed.text)) !== null) {
+          xmlToolCalls.push({
+            id: `xml-list-${Date.now()}-${xmlToolCalls.length}`,
+            name: 'list_files',
+            args: { path: match[1] }
+          });
+        }
+
+        // 4. search_files: <search_files query="..." />
+        const searchFilesRegex = /<search_files\s+query=["']([^"']+)["']\s*(?:\/>|>\s*<\/search_files>)/gi;
+        while ((match = searchFilesRegex.exec(parsed.text)) !== null) {
+          xmlToolCalls.push({
+            id: `xml-search-${Date.now()}-${xmlToolCalls.length}`,
+            name: 'search_files',
+            args: { query: match[1] }
+          });
+        }
+
+        // 5. run_command: <run_command command="..." />
+        const runCommandRegex = /<run_command\s+command=["']([^"']+)["']\s*(?:\/>|>\s*<\/run_command>)/gi;
+        while ((match = runCommandRegex.exec(parsed.text)) !== null) {
+          xmlToolCalls.push({
+            id: `xml-run-${Date.now()}-${xmlToolCalls.length}`,
+            name: 'run_command',
+            args: { command: match[1] }
+          });
+        }
+
+        if (xmlToolCalls.length > 0) {
+          parsed.toolCalls = xmlToolCalls;
+          console.log(`[CodeAI] Interceptó ${xmlToolCalls.length} llamadas de herramientas en formato XML en el texto.`);
+        }
+      }
 
       // If there are tool calls, execute them
       if (parsed.toolCalls && parsed.toolCalls.length > 0) {
@@ -743,8 +923,17 @@ agentRouter.post('/', async (req: Request, res: Response) => {
           }
 
           // Add tool result to conversation
-          const toolMsg = adapter.buildToolResult(tc.id, tc.name, result);
-          conversationMessages.push(toolMsg);
+          const isXml = tc.id.startsWith('xml-');
+          if (isXml) {
+            // Push as a user message to avoid API schema errors on tool role
+            conversationMessages.push({
+              role: 'user',
+              content: `[SISTEMA - RESULTADO DE HERRAMIENTA]:\nLa herramienta "${tc.name}" fue ejecutada con éxito.\nResultado:\n${result}`
+            });
+          } else {
+            const toolMsg = adapter.buildToolResult(tc.id, tc.name, result);
+            conversationMessages.push(toolMsg);
+          }
         }
 
         // Continue the loop — the AI will see the tool results

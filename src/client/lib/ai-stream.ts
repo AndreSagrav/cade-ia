@@ -7,17 +7,18 @@ import { processAgentResponse } from './agent';
 import type { AIProvider, ToolCall } from '@shared/types';
 import { getLanguageFromPath } from './utils';
 
-/** Flatten file tree into a compact path list */
-function flattenTree(entries: any[], prefix = ''): string[] {
-  const out: string[] = [];
+/** Flatten file tree into a compact path list (with budget early-exit to avoid lag) */
+function flattenTree(entries: any[], prefix = '', limit = 200, out: string[] = []): string[] {
+  if (out.length >= limit) return out;
   for (const e of entries ?? []) {
+    if (out.length >= limit) break;
     const name = e.name ?? e.path?.split('/').pop() ?? '';
     if (!name) continue;
     if (name.startsWith('.') || name === 'node_modules' || name === 'dist' || name === 'build') continue;
     const full = prefix ? `${prefix}/${name}` : name;
     if (e.kind === 'directory' || e.children) {
       out.push(`${full}/`);
-      if (e.children) out.push(...flattenTree(e.children, full));
+      if (e.children) flattenTree(e.children, full, limit, out);
     } else {
       out.push(full);
     }
@@ -32,6 +33,12 @@ function buildSystemPrompt(): string {
   const agentMode = useChatStore.getState().agentMode;
 
   let system = `Eres CodeAI, el asistente de programación integrado en este IDE. Hablas en español.
+
+¡REGLA ABSOLUTA DE ACCESO A ARCHIVOS (CRÍTICO - OBLIGATORIO)!:
+- Tienes acceso COMPLETO y en tiempo real a la estructura de archivos y al código del proyecto actual del usuario.
+- Si el usuario te pregunta "¿puedes ver mis archivos?", "¿puedo ver los archivos indexados?" o consultas similares, responde SIEMPRE con un rotundo SÍ, y demuéstralo de inmediato.
+- NUNCA digas "no tengo acceso directo a los archivos locales" o "soy un modelo de texto y no puedo ver tus archivos". Eso es FALSO en este IDE. Tienes el contexto del proyecto inyectado en este prompt y debes usarlo.
+- Demuestra que sí puedes verlos listando los archivos que tienes en el "ÁRBOL DEL PROYECTO" o el contenido de los "ARCHIVOS EN CONTEXTO" a continuación.
 
 PERSONALIDAD Y ESTILO DE COMUNICACIÓN:
 - Habla como un compañero programador, no como un robot. Sé natural y directo.
@@ -50,20 +57,22 @@ PERSONALIDAD Y ESTILO DE COMUNICACIÓN:
 ¡ERES UN AGENTE AUTÓNOMO, NO UN ASISTENTE DE TEXTO!
 TIENES que usar tus herramientas para hacer el trabajo POR el usuario.
 
-HERRAMIENTAS DISPONIBLES:
-- read_file → leer un archivo
-- write_file → crear o modificar un archivo (escribe el contenido COMPLETO)
-- list_files → ver la estructura de carpetas
-- search_files → buscar texto en el proyecto
-- run_command → ejecutar comandos de terminal
+¡IMPORTANTE - EJECUCIÓN DE HERRAMIENTAS!:
+Si eres un modelo que no soporta llamadas a herramientas nativas en la API (o si esta las ignora), DEBES invocar las herramientas escribiendo directamente etiquetas XML en tu texto de respuesta. El IDE interceptará, ejecutará la herramienta de forma automática en el sistema y te devolverá el resultado. Usa los siguientes formatos exactos:
+
+- Leer un archivo: <read_file path="src/client/App.tsx" />
+- Crear/Editar un archivo (siempre escribe el contenido COMPLETO):
+<write_file path="src/client/prueba.txt">CONTENIDO_COMPLETO</write_file>
+- Listar archivos de una carpeta: <list_files path="src" />
+- Buscar texto en el proyecto: <search_files query="mi_busqueda" />
+- Ejecutar comando de terminal: <run_command command="npm install" />
 
 REGLAS ESTRICTAS E INQUEBRANTABLES:
-1. ¡NUNCA le pidas al usuario que ejecute comandos en la terminal! DEBES usar la herramienta \`run_command\` tú mismo.
-2. ¡NUNCA le des al usuario instrucciones manuales de cómo editar un archivo ("Copia y pega esto en server.js")! DEBES usar la herramienta \`write_file\` tú mismo para alterar el código.
-3. El usuario te está usando para que TÚ hagas el trabajo de programación y consola, no para leer tutoriales. Actúa directamente sobre el proyecto.
-4. SIEMPRE lee un archivo antes de editarlo con \`read_file\` si existe.
-5. Explica brevemente lo que vas a hacer e INMEDIATAMENTE invoca la herramienta.
-6. ¡CRÍTICO! NO uses \`run_command\` para iniciar servidores (ej. \`node server.js\`, \`npm run dev\`, \`npm start\`). La herramienta es síncrona y bloqueará el IDE entero. Si el usuario te pide arrancar un servidor, dile amablemente que tú no puedes mantener un servidor vivo en background, y pídele que use ÉL MISMO la terminal del IDE.`;
+1. ¡NUNCA le pidas al usuario que ejecute comandos en la terminal o modifique archivos de forma manual! DEBES usar las herramientas nativas o las etiquetas XML tú mismo.
+2. El usuario te está usando para que TÚ hagas el trabajo de programación y consola, no para leer tutoriales. Actúa directamente sobre el proyecto.
+3. SIEMPRE lee un archivo antes de editarlo con \`read_file\` si existe.
+4. Explica brevemente lo que vas a hacer e INMEDIATAMENTE invoca la herramienta (ya sea de forma nativa o mediante su tag XML).
+5. ¡CRÍTICO! NO uses \`run_command\` para iniciar servidores (ej. \`node server.js\`, \`npm run dev\`, \`npm start\`). La herramienta es síncrona y bloqueará el IDE entero. Si el usuario te pide arrancar un servidor, dile amablemente que tú no puedes mantener un servidor vivo en background, y pídele que use ÉL MISMO la terminal del IDE.`;
   } else {
     system += `\nCuando generes código, usa bloques con el lenguaje indicado.`;
   }
@@ -72,9 +81,9 @@ REGLAS ESTRICTAS E INQUEBRANTABLES:
     system += `\n\nProyecto abierto en: ${rootPath}`;
   }
 
-  // Project tree (compact, top 200 entries)
+  // Project tree (compact, top 200 entries, optimized early exit)
   if (fileTree && fileTree.length > 0) {
-    const paths = flattenTree(fileTree as any[]).slice(0, 200);
+    const paths = flattenTree(fileTree as any[], '', 200);
     if (paths.length > 0) {
       system += `\n\n--- ÁRBOL DEL PROYECTO ---\n${paths.join('\n')}`;
     }
@@ -161,13 +170,24 @@ function buildRequestBody(
     case 'deepseek':
     case 'nvidia':
     case 'openrouter':
-    default:
+    default: {
+      const formattedMessages = [...messages];
+      const firstUserMsgIndex = formattedMessages.findIndex(m => m.role === 'user');
+      if (firstUserMsgIndex !== -1) {
+        formattedMessages[firstUserMsgIndex] = {
+          ...formattedMessages[firstUserMsgIndex],
+          content: `${system}\n\n---\n\n${formattedMessages[firstUserMsgIndex].content}`
+        };
+      } else {
+        formattedMessages.unshift({ role: 'user', content: `${system}\n\n---\n\nPor favor inicia la sesión.` });
+      }
       return {
         model: apiModelId,
-        messages: [{ role: 'system', content: system }, ...messages],
+        messages: formattedMessages,
         max_tokens: model?.maxTokens ?? 4096,
         stream: true,
       };
+    }
   }
 }
 
@@ -512,7 +532,9 @@ function handleAgentEvent(
   switch (event) {
     case 'status':
       if (data.type === 'thinking') {
-        appendContent(`🤔 *Analizando paso...*\n\n`);
+        appendContent(`⏳ ...\n\n`);
+      } else if (data.type === 'rate_limit') {
+        appendContent(`⚠️ Límite de peticiones alcanzado (429). Reintentando en ${(data.delay / 1000).toFixed(1)}s... (Intento ${data.attempt}/${data.maxAttempts})\n\n`);
       }
       break;
 
@@ -648,6 +670,23 @@ async function streamDirectChat(): Promise<void> {
 
   const apiKeys = settingsStore.apiKeys as unknown as Record<string, string>;
   const provider = model.provider;
+  const providerKey = apiKeys[provider] || '';
+  
+  // Diagnostic: log what key we have
+  console.log(`[CodeAI Chat] Modelo: ${model.label} | Provider: ${provider} | Key presente: ${providerKey ? 'SÍ (' + providerKey.slice(0, 8) + '...)' : 'NO (vacía)'}`);
+  console.log(`[CodeAI Chat] Todas las keys en store:`, Object.entries(apiKeys).map(([k, v]) => `${k}: ${v ? '✅' : '❌'}`).join(', '));
+  
+  // If no key and model requires one, show a helpful error immediately
+  if (!providerKey && !['nvidia', 'openrouter'].includes(provider)) {
+    // Paid providers absolutely need a key
+    chatStore.addMessage({
+      id: Date.now().toString(36), role: 'assistant',
+      content: `❌ No tienes configurada una API key para **${provider}**. Ve a Configuración (⚙️) → API Keys y pega tu llave de ${model.label}.`,
+      timestamp: Date.now(), model: selectedModel,
+    });
+    return;
+  }
+  
   const { path, headers } = getProviderConfig(provider, apiKeys);
 
   const session = sessions.find((s) => s.id === activeSessionId);

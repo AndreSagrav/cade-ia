@@ -67,7 +67,7 @@ filesRouter.post('/read', (req: Request, res: Response) => {
 
 // File tree
 filesRouter.post('/tree', (req: Request, res: Response) => {
-  const { root, maxDepth = 5 } = req.body;
+  const { root, maxDepth = 30 } = req.body;
   if (!root) {
     return res.status(400).json({ error: 'Missing root' });
   }
@@ -86,20 +86,40 @@ filesRouter.post('/resolve', (req: Request, res: Response) => {
   const { name } = req.body;
   if (!name) return res.status(400).json({ error: 'Missing name' });
 
-  // Try common locations
+  const cwd = process.cwd();
+  const userProfile = process.env.HOME ?? process.env.USERPROFILE ?? '';
+
+  // Try common locations and sibling folder locations recursively
   const candidates = [
-    resolve(process.cwd(), name),
-    resolve(process.env.HOME ?? process.env.USERPROFILE ?? '', 'Documents', name),
-    resolve(process.env.HOME ?? process.env.USERPROFILE ?? '', 'Projects', name),
-    resolve(process.env.HOME ?? process.env.USERPROFILE ?? '', 'Documents', 'PROYECTOS', name),
+    // 1. Exact path or relative to cwd
+    resolve(cwd, name),
+    // 2. Sibling folders of the current project (very common when working in a monorepo or project folder)
+    resolve(cwd, '..', name),
+    resolve(cwd, '..', '..', name),
+    resolve(cwd, '..', '..', '..', name),
+    // 3. OneDrive Documents and PROYECTOS paths (common in Windows user profiles)
+    resolve(userProfile, 'OneDrive', 'Documentos', 'PROYECTOS', name),
+    resolve(userProfile, 'OneDrive', 'Documents', 'PROYECTOS', name),
+    resolve(userProfile, 'OneDrive', 'Documentos', name),
+    resolve(userProfile, 'OneDrive', 'Documents', name),
+    resolve(userProfile, 'OneDrive - Personal', 'Documentos', 'PROYECTOS', name),
+    resolve(userProfile, 'OneDrive - Personal', 'Documents', 'PROYECTOS', name),
+    resolve(userProfile, 'OneDrive - Personal', 'Documentos', name),
+    resolve(userProfile, 'OneDrive - Personal', 'Documents', name),
+    // 4. Standard Documents paths
+    resolve(userProfile, 'Documents', name),
+    resolve(userProfile, 'Projects', name),
+    resolve(userProfile, 'Documents', 'PROYECTOS', name),
   ];
 
   for (const candidate of candidates) {
     if (existsSync(candidate)) {
+      console.log(`[CodeAI] Resolvió exitosamente carpeta "${name}" en: ${candidate}`);
       return res.json({ path: candidate });
     }
   }
 
+  console.warn(`[CodeAI] Advertencia: No se pudo verificar ubicación exacta de "${name}". Usando ruta directa.`);
   res.json({ path: name, guessed: true });
 });
 
@@ -157,7 +177,7 @@ filesRouter.post('/list-directories', (req: Request, res: Response) => {
   }
 });
 
-function buildTree(dir: string, depth: number, maxDepth: number): object[] {
+function buildTree(dir: string, depth: number, maxDepth: number, rootDir: string = dir): object[] {
   if (depth >= maxDepth) return [];
   if (!existsSync(dir)) return [];
 
@@ -175,11 +195,16 @@ function buildTree(dir: string, depth: number, maxDepth: number): object[] {
     if (SKIP_DIRS.has(entry.name)) continue;
 
     const entryPath = join(dir, entry.name);
-    const relativePath = relative(dir, entryPath);
+    const relativePath = relative(rootDir, entryPath).replace(/\\/g, '/');
 
     if (entry.isDirectory()) {
-      const children = buildTree(entryPath, depth + 1, maxDepth);
-      items.push({ name: entry.name, path: relativePath, kind: 'directory', children });
+      try {
+        const children = buildTree(entryPath, depth + 1, maxDepth, rootDir);
+        items.push({ name: entry.name, path: relativePath, kind: 'directory', children });
+      } catch (err) {
+        console.error(`[CodeAI] Error al indexar carpeta ${entryPath}:`, err);
+        items.push({ name: entry.name, path: relativePath, kind: 'directory', children: [] });
+      }
     } else {
       try {
         const stat = statSync(entryPath);

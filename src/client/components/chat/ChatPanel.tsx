@@ -7,6 +7,7 @@ import { cn } from '@/lib/utils';
 import { streamChat } from '@/lib/ai-stream';
 import { rewindToMessage } from '@/lib/agent';
 import type { Attachment } from '@shared/types';
+import ReactMarkdown from 'react-markdown';
 
 export function ChatPanel() {
   const [input, setInput] = useState('');
@@ -240,9 +241,9 @@ export function ChatPanel() {
                     {currentModel?.label ?? 'IA'}
                   </div>
                   {streamContent ? (
-                    <p className="text-sm leading-relaxed whitespace-pre-wrap" style={{ color: 'hsl(var(--foreground))' }}>
-                      {streamContent}
-                    </p>
+                    <div className="text-sm leading-relaxed prose prose-invert max-w-none text-foreground prose-p:leading-relaxed prose-pre:bg-surface-hover prose-pre:border prose-pre:border-border">
+                      <ReactMarkdown>{streamContent}</ReactMarkdown>
+                    </div>
                   ) : (
                     <div className="flex items-center gap-1.5 pt-1">
                       {[0, 1, 2].map(i => (
@@ -458,10 +459,9 @@ function MessageBubble({ message, isLast }: { message: any; isLast: boolean }) {
         </div>
         {prose && (
           <div
-            className="text-[13px] leading-relaxed whitespace-pre-wrap"
-            style={{ color: 'hsl(var(--foreground))' }}
+            className="text-[13px] leading-relaxed prose prose-invert max-w-none text-foreground prose-p:leading-relaxed prose-pre:bg-surface-hover prose-pre:border prose-pre:border-border"
           >
-            {prose}
+            <ReactMarkdown>{prose}</ReactMarkdown>
           </div>
         )}
         {hasActions && (
