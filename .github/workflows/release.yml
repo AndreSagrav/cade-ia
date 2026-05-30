@@ -8,7 +8,7 @@ on:
 jobs:
   release:
     name: Build & Release Windows App
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
 
     permissions:
       contents: write
@@ -25,12 +25,6 @@ jobs:
         with:
           node-version: 20
           cache: 'npm'
-
-      - name: Install Wine for Electron Builder
-        run: |
-          sudo dpkg --add-architecture i386
-          sudo apt-get update
-          sudo apt-get install -y wine64 wine32
 
       - name: Install Dependencies
         run: npm ci
