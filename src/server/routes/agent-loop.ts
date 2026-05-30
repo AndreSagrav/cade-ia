@@ -468,7 +468,7 @@ function openaiAdapter(endpoint: string, extra?: Record<string, string>): Provid
         }
       } else {
         // Fallback if no user message exists yet (e.g. initial ping)
-        formattedMessages.unshift({ role: 'user', content: `${system}\n\n---\n\nPor favor inicia la sesión.` });
+        formattedMessages.unshift({ role: 'user', content: `${system}\n\n---\n\nPor favor inicia la sesión.` } as any);
       }
 
       return {
@@ -656,7 +656,7 @@ async function fetchWithRetry(
   options: RequestInit,
   onRetry?: (attempt: number, delayMs: number, errorMsg: string) => void,
   onHeartbeat?: () => void
-): Promise<Response> {
+): Promise<globalThis.Response> {
   let attempt = 0;
   const maxAttempts = 10;
   let delay = 2000;
