@@ -67,7 +67,34 @@ export function ChatPanel() {
 
   const handleSend = useCallback(async () => {
     if (!input.trim() && attachments.length === 0) return;
-    if (isStreaming) return;
+    
+    // If the agent is currently running, we send this as an interruption (human-in-the-loop)
+    if (isStreaming) {
+      if (!input.trim()) return;
+      const text = input.trim();
+      setInput('');
+      if (textareaRef.current) textareaRef.current.style.height = 'auto';
+      
+      // Add message locally to the chat screen
+      addMessage({ 
+        id: Date.now().toString(36), 
+        role: 'user', 
+        content: text, 
+        timestamp: Date.now() 
+      });
+      
+      try {
+        await fetch('/api/agent/interrupt', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sessionId: activeSessionId, message: text }),
+        });
+      } catch (err) {
+        console.error('Error enviando comentario de interrupción:', err);
+      }
+      return;
+    }
+
     const text = input.trim();
     const currentAttachments = [...attachments];
     setInput('');
@@ -327,14 +354,27 @@ export function ChatPanel() {
             <div className="flex-1" />
             
             {isStreaming ? (
-              <button
-                onClick={abortAgent}
-                className="flex h-9 w-9 items-center justify-center rounded-full transition-all duration-150 hover:scale-105 active:scale-95"
-                style={{ background: 'hsl(var(--destructive))', color: '#11111b', boxShadow: '0 4px 12px rgba(243, 139, 168, 0.3)' }}
-                title="Detener generación"
-              >
-                <div className="h-3 w-3 rounded-sm bg-current" />
-              </button>
+              <div className="flex items-center gap-2">
+                {input.trim() && (
+                  <button
+                    onClick={handleSend}
+                    className="flex h-8 px-3 items-center justify-center gap-1.5 rounded-full text-[11px] font-bold transition-all duration-150 hover:scale-105 active:scale-95"
+                    style={{ background: 'linear-gradient(135deg, #89b4fa, #cba6f7)', color: '#11111b', boxShadow: '0 4px 12px rgba(137, 180, 250, 0.3)' }}
+                    title="Enviar comentario / interrupción"
+                  >
+                    <Send size={11} />
+                    <span>Comentar</span>
+                  </button>
+                )}
+                <button
+                  onClick={abortAgent}
+                  className="flex h-9 w-9 items-center justify-center rounded-full transition-all duration-150 hover:scale-105 active:scale-95"
+                  style={{ background: 'hsl(var(--destructive))', color: '#11111b', boxShadow: '0 4px 12px rgba(243, 139, 168, 0.3)' }}
+                  title="Detener generación"
+                >
+                  <div className="h-3 w-3 rounded-sm bg-current" />
+                </button>
+              </div>
             ) : input.trim() ? (
               <button
                 onClick={handleSend}

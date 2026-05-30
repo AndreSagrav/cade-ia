@@ -418,6 +418,7 @@ async function streamAgentChat(): Promise<void> {
     apiKey: providerKey,
     maxIterations: 1000,
     githubToken: activeAccount?.token || '',
+    sessionId: activeSessionId || '',
   };
 
   chatStore.setStreaming(true);

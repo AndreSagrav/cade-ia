@@ -737,12 +737,30 @@ async function fetchWithRetry(
   }
 }
 
+// Active session user interruptions queue (human-in-the-loop)
+const pendingInterruptions = new Map<string, string[]>();
+
+// Interruption endpoint
+agentRouter.post('/interrupt', (req: Request, res: Response) => {
+  const { sessionId, message } = req.body;
+  if (!sessionId || !message) {
+    return res.status(400).json({ error: 'Missing sessionId or message' });
+  }
+
+  if (!pendingInterruptions.has(sessionId)) {
+    pendingInterruptions.set(sessionId, []);
+  }
+  pendingInterruptions.get(sessionId)!.push(message);
+  console.log(`[CodeAI] Interrupción recibida para sesión "${sessionId}": "${message}"`);
+  res.json({ ok: true });
+});
+
 // ═══════════════════════════════════════
 // Agent loop endpoint
 // ═══════════════════════════════════════
 
 agentRouter.post('/', async (req: Request, res: Response) => {
-  const { messages, model, provider, system, projectRoot, maxIterations = 1000, githubToken } = req.body;
+  const { messages, model, provider, system, projectRoot, maxIterations = 1000, githubToken, sessionId } = req.body;
 
   // Store GitHub token for git tools
   if (githubToken) (global as any).__codeai_github_token__ = githubToken;
@@ -778,6 +796,21 @@ agentRouter.post('/', async (req: Request, res: Response) => {
   try {
     while (iteration < maxIterations) {
       iteration++;
+
+      // Check for user interruptions (human-in-the-loop)
+      if (sessionId && pendingInterruptions.has(sessionId)) {
+        const queue = pendingInterruptions.get(sessionId)!;
+        if (queue.length > 0) {
+          const userMsg = queue.shift()!;
+          conversationMessages.push({
+            role: 'user',
+            content: userMsg
+          } as any);
+          sendEvent('content', {
+            text: `\n\n📥 **[Comentario de usuario recibido]:** *"${userMsg}"*\n*Alineando prioridades y recalculando pasos...*\n\n`
+          });
+        }
+      }
 
       // Call the AI provider (non-streaming to get full response with tool calls)
       const body = adapter.buildBody(model, conversationMessages, system || '');
@@ -953,6 +986,7 @@ agentRouter.post('/', async (req: Request, res: Response) => {
   } catch (e: any) {
     sendEvent('error', { message: `Agent error: ${e.message}` });
   } finally {
+    if (sessionId) pendingInterruptions.delete(sessionId);
     sendEvent('done', {});
     res.end();
   }
