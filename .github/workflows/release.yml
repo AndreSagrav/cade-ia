@@ -8,7 +8,7 @@ on:
 jobs:
   release:
     name: Build & Release Windows App
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
 
     permissions:
       contents: write
@@ -40,8 +40,8 @@ jobs:
           # Bump the version in package.json (patch level, e.g. 2.0.0 -> 2.0.1)
           npm version patch -m "ci: bump version to %s [skip ci]"
           # Get new version
-          $VERSION = node -p "require('./package.json').version"
-          echo "NEW_VERSION=$VERSION" >> $env:GITHUB_OUTPUT
+          VERSION=$(node -p "require('./package.json').version")
+          echo "NEW_VERSION=$VERSION" >> $GITHUB_OUTPUT
           # Push version commit back to GitHub
           git push origin main
 
