@@ -1,7 +1,8 @@
 import { app, BrowserWindow, shell } from 'electron';
 import { join } from 'path';
 import { spawn } from 'child_process';
-import { autoUpdater } from 'electron-updater';
+import pkg from 'electron-updater';
+const { autoUpdater } = pkg;
 
 let mainWindow: BrowserWindow | null = null;
 let serverProcess: ReturnType<typeof spawn> | null = null;
