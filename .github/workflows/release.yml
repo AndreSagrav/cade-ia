@@ -51,7 +51,7 @@ jobs:
           VERSION=$(node -p "require('./package.json').version")
           echo "NEW_VERSION=$VERSION" >> $GITHUB_OUTPUT
           # Push version commit back to GitHub
-          git push origin main
+          git push origin main --tags
 
       - name: Compile Client
         run: npm run build
