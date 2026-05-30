@@ -18,18 +18,33 @@ export function App() {
   const setFolderPickerOpen = useEditorStore((s) => s.setFolderPickerOpen);
   const { handleRefreshTree, handleFolderSelected } = useProject();
 
-  // Verify saved token on mount
+  // Verify session on mount via Supabase
   useEffect(() => {
-    const token = localStorage.getItem('codeai-auth');
-    if (!token) { setAuthChecked(true); return; }
-    fetch('/api/auth/verify', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token }),
-    })
-      .then((r) => { if (r.ok) setAuthenticated(true); })
-      .catch(() => {})
-      .finally(() => setAuthChecked(true));
+    import('./lib/supabase').then(({ supabase }) => {
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (session) {
+          setAuthenticated(true);
+          const keys = session.user.user_metadata?.codeai_keys;
+          if (keys) {
+            useSettingsStore.getState().hydrateFromCloud(keys);
+          }
+        }
+        setAuthChecked(true);
+      });
+
+      // Listen for auth changes to sync state
+      supabase.auth.onAuthStateChange((event, session) => {
+        if (event === 'SIGNED_IN' && session) {
+          setAuthenticated(true);
+          const keys = session.user.user_metadata?.codeai_keys;
+          if (keys) {
+            useSettingsStore.getState().hydrateFromCloud(keys);
+          }
+        } else if (event === 'SIGNED_OUT') {
+          setAuthenticated(false);
+        }
+      });
+    });
   }, []);
 
   useEffect(() => {

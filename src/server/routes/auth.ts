@@ -15,6 +15,8 @@ function generateToken(): string {
   return crypto.randomBytes(32).toString('hex');
 }
 
+// Deprecated: Authentication is now handled by Supabase in the frontend.
+// These routes remain for backwards compatibility or offline local usage if configured.
 authRouter.post('/login', (req: Request, res: Response) => {
   const { user, password } = req.body;
 
@@ -48,6 +50,7 @@ authRouter.post('/login', (req: Request, res: Response) => {
   return res.status(401).json({ error: 'Usuario o contraseña incorrectos' });
 });
 
+// Deprecated
 authRouter.post('/verify', (req: Request, res: Response) => {
   const { token } = req.body;
   if (token && validTokens.has(token)) {
@@ -56,6 +59,7 @@ authRouter.post('/verify', (req: Request, res: Response) => {
   return res.status(401).json({ error: 'Token inválido' });
 });
 
+// Deprecated
 authRouter.post('/logout', (req: Request, res: Response) => {
   const { token } = req.body;
   if (token) validTokens.delete(token);

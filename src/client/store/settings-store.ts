@@ -37,6 +37,7 @@ interface SettingsState {
   toggleTerminal: () => void;
   toggleSidebar: () => void;
   toggleChat: () => void;
+  hydrateFromCloud: (keys: Partial<APIKeys>) => void;
 }
 
 /** Migrate API keys from v1 (localStorage 'codeai_keys') */
@@ -134,6 +135,9 @@ export const useSettingsStore = create<SettingsState>()(
       toggleTerminal: () => set({ terminalVisible: !get().terminalVisible }),
       toggleSidebar: () => set({ sidebarVisible: !get().sidebarVisible }),
       toggleChat: () => set({ chatVisible: !get().chatVisible }),
+      hydrateFromCloud: (keys) => {
+        set({ apiKeys: { ...get().apiKeys, ...keys } });
+      },
     }),
     {
       name: 'codeai-settings',

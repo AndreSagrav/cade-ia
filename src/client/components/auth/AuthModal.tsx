@@ -1,37 +1,40 @@
 import { useState } from 'react';
-import { Lock, Sparkles } from 'lucide-react';
+import { Lock, Sparkles, UserPlus, LogIn } from 'lucide-react';
+import { supabase } from '../../lib/supabase';
 
 interface AuthGateProps {
   onUnlock: () => void;
 }
 
 export function AuthGate({ onUnlock }: AuthGateProps) {
-  const [user, setUser] = useState('');
+  const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [isSignUp, setIsSignUp] = useState(false);
+  const [successMsg, setSuccessMsg] = useState('');
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
+    setSuccessMsg('');
     setLoading(true);
 
     try {
-      const res = await fetch('/api/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ user, password }),
-      });
-      const data = await res.json();
-
-      if (res.ok && data.token) {
-        localStorage.setItem('codeai-auth', data.token);
-        onUnlock();
+      if (isSignUp) {
+        const { error } = await supabase.auth.signUp({ email, password });
+        if (error) throw error;
+        setSuccessMsg('Revisa tu correo para confirmar la cuenta (si aplica), o intenta iniciar sesión.');
+        setIsSignUp(false);
       } else {
-        setError(data.error || 'Credenciales inválidas');
+        const { error, data } = await supabase.auth.signInWithPassword({ email, password });
+        if (error) throw error;
+        if (data.session) {
+          onUnlock();
+        }
       }
-    } catch {
-      setError('Error de conexión con el servidor');
+    } catch (err: any) {
+      setError(err.message || 'Error de autenticación');
     }
     setLoading(false);
   };
@@ -68,7 +71,7 @@ export function AuthGate({ onUnlock }: AuthGateProps) {
         />
 
         {/* Logo */}
-        <div className="mb-10 text-center">
+        <div className="mb-8 text-center">
           <div
             className="mx-auto mb-5 flex h-20 w-20 items-center justify-center rounded-3xl animate-gradient"
             style={{
@@ -90,7 +93,7 @@ export function AuthGate({ onUnlock }: AuthGateProps) {
             CodeAI Studio
           </h1>
           <p className="mt-2 text-[13px]" style={{ color: '#a6adc8' }}>
-            Inicia sesión para acceder
+            {isSignUp ? 'Crea una cuenta para sincronizar tus llaves' : 'Inicia sesión para sincronizar tus llaves'}
           </p>
         </div>
 
@@ -100,11 +103,12 @@ export function AuthGate({ onUnlock }: AuthGateProps) {
               Email
             </label>
             <input
-              type="text"
-              value={user}
-              onChange={(e) => { setUser(e.target.value); setError(''); }}
+              type="email"
+              value={email}
+              onChange={(e) => { setEmail(e.target.value); setError(''); }}
               placeholder="tu@email.com"
               autoFocus
+              required
               className="w-full rounded-xl px-4 py-3.5 text-sm outline-none transition-all duration-200"
               style={{
                 background: '#313244',
@@ -132,6 +136,8 @@ export function AuthGate({ onUnlock }: AuthGateProps) {
                 value={password}
                 onChange={(e) => { setPassword(e.target.value); setError(''); }}
                 placeholder="••••••••"
+                required
+                minLength={6}
                 className="flex-1 bg-transparent text-sm outline-none"
                 style={{ color: '#cdd6f4' }}
               />
@@ -146,20 +152,41 @@ export function AuthGate({ onUnlock }: AuthGateProps) {
               {error}
             </div>
           )}
+          
+          {successMsg && (
+            <div
+              className="rounded-xl px-4 py-3 text-center text-xs font-medium"
+              style={{ background: 'rgba(166, 227, 161, 0.1)', color: '#a6e3a1', border: '1px solid rgba(166, 227, 161, 0.2)' }}
+            >
+              {successMsg}
+            </div>
+          )}
 
           <button
             type="submit"
             disabled={loading}
-            className="flex w-full items-center justify-center gap-2 rounded-xl py-3.5 text-sm font-bold transition-all duration-200 disabled:opacity-50 hover:scale-[1.02] active:scale-[0.98]"
+            className="flex w-full items-center justify-center gap-2 rounded-xl py-3.5 text-sm font-bold transition-all duration-200 disabled:opacity-50 hover:scale-[1.02] active:scale-[0.98] mt-2"
             style={{
               background: 'linear-gradient(135deg, #89b4fa, #cba6f7)',
               color: '#11111b',
               boxShadow: '0 4px 20px rgba(137, 180, 250, 0.3)',
             }}
           >
-            {loading ? 'Verificando...' : 'Entrar'}
+            {isSignUp ? <UserPlus size={16} /> : <LogIn size={16} />}
+            {loading ? 'Procesando...' : (isSignUp ? 'Crear Cuenta' : 'Entrar')}
           </button>
         </form>
+
+        <div className="mt-6 text-center">
+          <button
+            type="button"
+            onClick={() => { setIsSignUp(!isSignUp); setError(''); setSuccessMsg(''); }}
+            className="text-[12px] font-medium transition-colors hover:text-white"
+            style={{ color: '#89b4fa' }}
+          >
+            {isSignUp ? '¿Ya tienes cuenta? Inicia sesión' : '¿No tienes cuenta? Regístrate gratis'}
+          </button>
+        </div>
       </div>
     </div>
   );

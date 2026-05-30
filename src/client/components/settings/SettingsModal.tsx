@@ -115,7 +115,13 @@ function APIKeysTab() {
             className="w-full rounded-xl px-4 py-2.5 text-xs outline-none transition-all duration-150"
             style={{ background: '#313244', border: '1px solid #45475a', color: '#cdd6f4' }}
             onFocus={(e) => { e.currentTarget.style.borderColor = '#89b4fa'; e.currentTarget.style.boxShadow = '0 0 0 3px rgba(137,180,250,0.1)'; }}
-            onBlur={(e) => { e.currentTarget.style.borderColor = '#45475a'; e.currentTarget.style.boxShadow = 'none'; }}
+            onBlur={(e) => { 
+              e.currentTarget.style.borderColor = '#45475a'; 
+              e.currentTarget.style.boxShadow = 'none'; 
+              import('@/lib/supabase').then(({ supabase }) => {
+                supabase.auth.updateUser({ data: { codeai_keys: useSettingsStore.getState().apiKeys } });
+              });
+            }}
           />
         </div>
       ))}
