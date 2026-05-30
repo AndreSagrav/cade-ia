@@ -18,6 +18,13 @@ function generateToken(): string {
 authRouter.post('/login', (req: Request, res: Response) => {
   const { user, password } = req.body;
 
+  // If no credentials configured, allow any login (dev mode)
+  if (!AUTH_USER && !AUTH_PASS) {
+    const token = generateToken();
+    validTokens.add(token);
+    return res.json({ ok: true, token });
+  }
+
   if (!user || !password) {
     return res.status(400).json({ error: 'Faltan credenciales' });
   }

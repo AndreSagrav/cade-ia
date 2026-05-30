@@ -3,6 +3,7 @@
   "version": "2.0.0",
   "private": true,
   "type": "module",
+  "main": "dist-electron-main/main.js",
   "description": "AI-powered code editor with multi-model support",
   "author": "CodeAI Studio Team",
   "license": "MIT",
@@ -12,14 +13,15 @@
     "dev:server": "tsx watch src/server/index.ts",
     "build": "tsc -b && vite build",
     "build:server": "tsc -p tsconfig.server.json",
+    "build:electron": "tsc -p tsconfig.electron.json",
     "preview": "vite preview",
     "lint": "eslint src/ --ext .ts,.tsx --fix",
     "format": "prettier --write \"src/**/*.{ts,tsx,css}\"",
     "test": "vitest",
     "test:ui": "vitest --ui",
     "test:e2e": "playwright test",
-    "electron": "concurrently \"npm run dev:server\" \"wait-on http://localhost:5173 && electron .\"",
-    "electron:build": "npm run build && electron-builder --win",
+    "electron": "npm run build:electron && concurrently \"npm run dev:server\" \"wait-on http://localhost:7000 && electron .\"",
+    "electron:build": "npm run build && npm run build:server && npm run build:electron && electron-builder --win",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
@@ -35,6 +37,7 @@
     "class-variance-authority": "^0.7.0",
     "clsx": "^2.1.0",
     "cors": "^2.8.5",
+    "electron-updater": "^6.8.3",
     "express": "^4.21.0",
     "express-rate-limit": "^7.4.0",
     "helmet": "^7.1.0",
@@ -82,10 +85,15 @@
     "directories": {
       "output": "dist-electron"
     },
+    "publish": {
+      "provider": "github",
+      "owner": "AndreSagrav",
+      "repo": "cade-ia"
+    },
     "files": [
       "dist/**/*",
       "dist-server/**/*",
-      "electron/**/*",
+      "dist-electron-main/**/*",
       "!node_modules/.cache/**"
     ],
     "win": {
