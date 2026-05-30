@@ -53,6 +53,9 @@ jobs:
       - name: Compile Server
         run: npm run build:server
 
+      - name: Compile Electron
+        run: npm run build:electron
+
       - name: Build & Publish Electron App
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
