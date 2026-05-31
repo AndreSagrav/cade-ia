@@ -29,7 +29,7 @@ for (const [key, value] of Object.entries(loadEnv())) {
 export const config = {
   port: parseInt(env.PORT ?? '3001', 10),
   nodeEnv: env.NODE_ENV ?? 'development',
-  allowedOrigins: (env.ALLOWED_ORIGINS ?? 'http://localhost:5173,http://localhost:3001').split(','),
+  allowedOrigins: (env.ALLOWED_ORIGINS ?? 'http://localhost:5173,http://localhost:3001,http://localhost:7000,http://localhost:7001,null').split(','),
   rateLimitMax: parseInt(env.RATE_LIMIT_MAX ?? '100', 10),
   rateLimitWindowMs: parseInt(env.RATE_LIMIT_WINDOW_MS ?? '60000', 10),
 

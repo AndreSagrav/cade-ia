@@ -5,6 +5,7 @@ import { useChatStore } from '@/store/chat-store';
 import { AI_MODELS } from '@shared/models';
 import { cn } from '@/lib/utils';
 import { streamChat } from '@/lib/ai-stream';
+import { BASE_URL } from '@/lib/api';
 import { rewindToMessage } from '@/lib/agent';
 import type { Attachment } from '@shared/types';
 import ReactMarkdown from 'react-markdown';
@@ -84,7 +85,7 @@ export function ChatPanel() {
       });
       
       try {
-        await fetch('/api/agent/interrupt', {
+        await fetch(`${BASE_URL}/api/agent/interrupt`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ sessionId: activeSessionId, message: text }),

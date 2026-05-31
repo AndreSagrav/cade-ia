@@ -1,6 +1,10 @@
 import type { WriteFileRequest, ReadFileRequest, TreeRequest, RunCommandRequest } from '@shared/types';
 
-const BASE_URL = '';
+// In Electron production mode, the frontend is loaded via file:// protocol,
+// so relative API calls (e.g. /api/files/tree) would fail. We detect this
+// and point all calls to the embedded Express server on port 7001.
+const isElectronProd = window.location.protocol === 'file:';
+export const BASE_URL = isElectronProd ? 'http://localhost:7001' : '';
 
 class ApiClient {
   private async request<T>(path: string, options?: RequestInit): Promise<T> {

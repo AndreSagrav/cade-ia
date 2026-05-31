@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { X, Key, Palette, Type, Plus, Trash2, Github } from 'lucide-react';
 import { useSettingsStore } from '@/store/settings-store';
 import { cn } from '@/lib/utils';
+import { BASE_URL } from '@/lib/api';
 import { supabase } from '@/lib/supabase';
 
 interface SettingsModalProps {
@@ -400,7 +401,7 @@ function GitHubAccountsSection() {
     setLoading(true);
     setError('');
     try {
-      const res = await fetch('/api/github/profile', {
+      const res = await fetch(`${BASE_URL}/api/github/profile`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ token: newToken.trim() }),

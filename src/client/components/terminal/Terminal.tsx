@@ -1,6 +1,7 @@
 import { useState, useRef, useCallback } from 'react';
 import { TerminalIcon, X, Plus, ChevronRight } from 'lucide-react';
 import { useSettingsStore } from '@/store/settings-store';
+import { BASE_URL } from '@/lib/api';
 import type { KeyboardEvent } from 'react';
 
 export function Terminal() {
@@ -21,7 +22,7 @@ export function Terminal() {
     setInput('');
 
     try {
-      const res = await fetch('/api/terminal/run', {
+      const res = await fetch(`${BASE_URL}/api/terminal/run`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ cmd }),

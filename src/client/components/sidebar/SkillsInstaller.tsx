@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Download, Check, X, Loader2, CloudDownload } from 'lucide-react';
 import { useEditorStore } from '@/store/editor-store';
+import { BASE_URL } from '@/lib/api';
 
 
 interface InstallJob {
@@ -43,7 +44,7 @@ export function SkillsInstaller() {
       let finalUrl = newJobs[i].url;
 
       try {
-        const res = await fetch('/api/git/clone', {
+        const res = await fetch(`${BASE_URL}/api/git/clone`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ url: finalUrl, destination }),

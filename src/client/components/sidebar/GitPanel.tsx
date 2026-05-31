@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect } from 'react';
 import { GitBranch, RefreshCw, ArrowUpFromLine, ArrowDownToLine, Plus, FolderGit2, ExternalLink, ChevronDown, ChevronRight, AlertCircle, Github } from 'lucide-react';
 import { useEditorStore } from '@/store/editor-store';
 import { useSettingsStore } from '@/store/settings-store';
+import { BASE_URL } from '@/lib/api';
 
 
 interface GHUser { login: string; avatar_url: string; name: string; html_url: string }
@@ -48,7 +49,7 @@ export function GitPanel() {
   // Fetch GitHub profile
   useEffect(() => {
     if (!githubToken) { setGhUser(null); return; }
-    fetch('/api/github/profile', {
+    fetch(`${BASE_URL}/api/github/profile`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ token: githubToken }),
@@ -64,8 +65,8 @@ export function GitPanel() {
     setLoading(true);
     try {
       const [statusRes, branchRes] = await Promise.all([
-        fetch('/api/git/status', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ cwd: rootPath }) }).then(r => r.json()),
-        fetch('/api/git/branch', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ cwd: rootPath }) }).then(r => r.json()),
+        fetch(`${BASE_URL}/api/git/status`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ cwd: rootPath }) }).then(r => r.json()),
+        fetch(`${BASE_URL}/api/git/branch`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ cwd: rootPath }) }).then(r => r.json()),
       ]);
 
       if (statusRes.error === 'Not a git repository') {
@@ -90,7 +91,7 @@ export function GitPanel() {
   const handleInit = useCallback(async () => {
     if (!rootPath) return;
     setLoading(true);
-    await fetch('/api/git/init', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ cwd: rootPath }) });
+    await fetch(`${BASE_URL}/api/git/init`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ cwd: rootPath }) });
     await fetchStatus();
   }, [rootPath, fetchStatus]);
 
@@ -101,7 +102,7 @@ export function GitPanel() {
     setFeedback(null);
     try {
       // 1. Commit
-      const commitRes = await fetch('/api/git/commit', {
+      const commitRes = await fetch(`${BASE_URL}/api/git/commit`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ cwd: rootPath, message: commitMsg.trim() }),
@@ -115,7 +116,7 @@ export function GitPanel() {
 
       // 2. Auto-push
       if (githubToken) {
-        const pushRes = await fetch('/api/git/push', {
+        const pushRes = await fetch(`${BASE_URL}/api/git/push`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ cwd: rootPath, token: githubToken, branch }),
@@ -144,7 +145,7 @@ export function GitPanel() {
     setPullLoading(true);
     setFeedback(null);
     try {
-      const res = await fetch('/api/git/pull', {
+      const res = await fetch(`${BASE_URL}/api/git/pull`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ cwd: rootPath, token: githubToken || undefined, branch }),
@@ -162,7 +163,7 @@ export function GitPanel() {
     if (!githubToken) return;
     setReposLoading(true);
     try {
-      const res = await fetch('/api/github/repos', {
+      const res = await fetch(`${BASE_URL}/api/github/repos`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ token: githubToken }),

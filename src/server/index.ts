@@ -28,7 +28,7 @@ app.use(express.json({ limit: '10mb' }));
 // Rate limiting
 const limiter = rateLimit({
   windowMs: config.rateLimitWindowMs,
-  max: config.nodeEnv === 'development' ? 999999 : config.rateLimitMax,
+  max: 999999, // Local desktop app — no restrictive rate limiting needed
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'Too many requests, please try again later.' },
