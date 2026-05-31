@@ -1,6 +1,6 @@
 import { app, BrowserWindow, shell } from 'electron';
 import { join, dirname } from 'path';
-import { spawn } from 'child_process';
+import { spawn, fork } from 'child_process';
 import { fileURLToPath } from 'url';
 import pkg from 'electron-updater';
 const { autoUpdater } = pkg;
@@ -9,7 +9,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 let mainWindow: BrowserWindow | null = null;
-let serverProcess: ReturnType<typeof spawn> | null = null;
+let serverProcess: ReturnType<typeof fork> | null = null;
 
 const isDev = process.env.NODE_ENV === 'development' || !app.isPackaged;
 const SERVER_PORT = 7001;
@@ -18,7 +18,7 @@ function startServer() {
   if (isDev) return; // In dev mode, server runs separately
 
   const serverPath = join(__dirname, '..', 'dist-server', 'server', 'index.js');
-  serverProcess = spawn('node', [serverPath], {
+  serverProcess = fork(serverPath, [], {
     env: { ...process.env, PORT: String(SERVER_PORT) },
     stdio: 'pipe',
   });
