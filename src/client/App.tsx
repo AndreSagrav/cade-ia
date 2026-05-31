@@ -32,6 +32,9 @@ export function App() {
           }
         }
         setAuthChecked(true);
+      }).catch((err) => {
+        console.error('[CodeAI] ❌ Error verificando sesión de Supabase:', err);
+        setAuthChecked(true); // Always unblock the UI!
       });
 
       // Listen for auth changes to sync state
