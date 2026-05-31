@@ -177,7 +177,7 @@ export function AuthGate({ onUnlock }: AuthGateProps) {
           </button>
         </form>
 
-        <div className="mt-6 text-center">
+        <div className="mt-6 flex flex-col gap-3 text-center">
           <button
             type="button"
             onClick={() => { setIsSignUp(!isSignUp); setError(''); setSuccessMsg(''); }}
@@ -185,6 +185,15 @@ export function AuthGate({ onUnlock }: AuthGateProps) {
             style={{ color: '#89b4fa' }}
           >
             {isSignUp ? '¿Ya tienes cuenta? Inicia sesión' : '¿No tienes cuenta? Regístrate gratis'}
+          </button>
+          
+          <button
+            type="button"
+            onClick={onUnlock}
+            className="text-[11px] font-medium transition-colors opacity-70 hover:opacity-100"
+            style={{ color: '#a6adc8' }}
+          >
+            Continuar sin cuenta (Modo Local) →
           </button>
         </div>
       </div>
