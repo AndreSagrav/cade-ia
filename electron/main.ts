@@ -1,8 +1,12 @@
 import { app, BrowserWindow, shell } from 'electron';
-import { join } from 'path';
+import { join, dirname } from 'path';
 import { spawn } from 'child_process';
+import { fileURLToPath } from 'url';
 import pkg from 'electron-updater';
 const { autoUpdater } = pkg;
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 
 let mainWindow: BrowserWindow | null = null;
 let serverProcess: ReturnType<typeof spawn> | null = null;
