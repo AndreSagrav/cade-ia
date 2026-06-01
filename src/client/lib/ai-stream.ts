@@ -8,7 +8,7 @@ import type { AIProvider, ToolCall } from '@shared/types';
 import { getLanguageFromPath } from './utils';
 
 /** Flatten file tree into a compact path list (with budget early-exit to avoid lag) */
-function flattenTree(entries: any[], prefix = '', limit = 200, out: string[] = []): string[] {
+function flattenTree(entries: any[], prefix = '', limit = 80, out: string[] = []): string[] {
   if (out.length >= limit) return out;
   for (const e of entries ?? []) {
     if (out.length >= limit) break;
@@ -26,8 +26,34 @@ function flattenTree(entries: any[], prefix = '', limit = 200, out: string[] = [
   return out;
 }
 
-/** Build the system prompt with project context */
-function buildSystemPrompt(): string {
+const OPEN_FILE_BUDGET = 8000; // cap total chars from open files in system prompt
+
+const VISION_FALLBACK_ORDER = [
+  'gpt-4o-mini',
+  'gpt-4o',
+  'gemini-1.5-flash',
+  'claude-3-7-sonnet',
+  'claude-3-5-haiku',
+];
+
+function findVisionFallback(prefer?: string): string | null {
+  const ids = [...(prefer ? [prefer] : []), ...VISION_FALLBACK_ORDER];
+  for (const id of ids) {
+    const m = AI_MODELS[id];
+    if (m && m.capabilities?.includes('vision')) return id;
+  }
+  return null;
+}
+
+function truncateContent(text: string | undefined, max: number): string {
+  if (!text) return '';
+  return text.length > max ? text.slice(0, max) : text;
+}
+
+/** Build the system prompt with project context (light mode for NVIDIA or leanContext to avoid context bloat) */
+function buildSystemPrompt(provider?: AIProvider, lean?: boolean, mentionedContext?: string): string {
+  const leanMode = !!lean;
+  const lightMode = provider === 'nvidia' || leanMode;
   const editorState = useEditorStore.getState();
   const { rootPath, contextFiles, openFiles, fileTree, activeFilePath } = editorState;
   const agentMode = useChatStore.getState().agentMode;
@@ -77,39 +103,47 @@ REGLAS ESTRICTAS E INQUEBRANTABLES:
     system += `\nCuando generes código, usa bloques con el lenguaje indicado.`;
   }
 
-  if (rootPath) {
+  if (!lightMode && rootPath) {
     system += `\n\nProyecto abierto en: ${rootPath}`;
   }
 
-  // Project tree (compact, top 200 entries, optimized early exit)
-  if (fileTree && fileTree.length > 0) {
-    const paths = flattenTree(fileTree as any[], '', 200);
-    if (paths.length > 0) {
-      system += `\n\n--- ÁRBOL DEL PROYECTO ---\n${paths.join('\n')}`;
-    }
-  }
-
-  // Include open files in context (for both modes)
-  const filesToInclude = new Set<string>();
-  if (agentMode) {
-    if (activeFilePath) filesToInclude.add(activeFilePath);
-    for (const p of openFiles.keys()) filesToInclude.add(p);
-  }
-  for (const p of contextFiles) filesToInclude.add(p);
-
-  if (filesToInclude.size > 0) {
-    system += '\n\n--- ARCHIVOS EN CONTEXTO ---';
-    let total = 0;
-    const BUDGET = 40000;
-    for (const path of filesToInclude) {
-      if (total >= BUDGET) break;
-      const file = openFiles.get(path);
-      if (file) {
-        const slice = file.content.slice(0, Math.min(8000, BUDGET - total));
-        system += `\n\n### ${path}\n\`\`\`\n${slice}\n\`\`\``;
-        total += slice.length;
+  // In light mode (NVIDIA), skip project tree and open files to avoid oversized contexts
+  if (!lightMode) {
+    // Project tree (compact, top N entries, optimized early exit)
+    if (fileTree && fileTree.length > 0) {
+      const paths = flattenTree(fileTree as any[], '', leanMode ? 40 : 80);
+      if (paths.length > 0) {
+        system += `\n\n--- ÁRBOL DEL PROYECTO ---\n${paths.join('\n')}`;
       }
     }
+
+    // Include open files in context (for both modes)
+    const filesToInclude = new Set<string>();
+    if (agentMode) {
+      if (activeFilePath) filesToInclude.add(activeFilePath);
+      for (const p of openFiles.keys()) filesToInclude.add(p);
+    }
+    for (const p of contextFiles) filesToInclude.add(p);
+
+    if (filesToInclude.size > 0) {
+      system += '\n\n--- ARCHIVOS EN CONTEXTO ---';
+      let total = 0;
+      const budget = leanMode ? Math.min(OPEN_FILE_BUDGET, 4000) : OPEN_FILE_BUDGET;
+      const perFile = leanMode ? 1200 : 2000;
+      for (const path of filesToInclude) {
+        if (total >= budget) break;
+        const file = openFiles.get(path);
+        if (file) {
+          const slice = file.content.slice(0, Math.min(perFile, budget - total));
+          system += `\n\n### ${path}\n\`\`\`\n${slice}\n\`\`\``;
+          total += slice.length;
+        }
+      }
+    }
+  }
+
+  if (mentionedContext) {
+    system += mentionedContext;
   }
 
   return system;
@@ -135,52 +169,147 @@ function getProviderConfig(provider: AIProvider, apiKeys: Record<string, string>
   }
 }
 
-/** Build request body for each provider (non-agent mode) */
+/** Build request body for each provider (non-agent mode) with image support */
 function buildRequestBody(
   provider: AIProvider,
   modelId: string,
-  messages: { role: string; content: string }[],
+  messages: { role: string; content: string; attachments?: any[] }[],
   system: string,
 ) {
   const model = AI_MODELS[modelId];
   const apiModelId = model?.apiModelId ?? modelId;
+  const allowImages = !!model?.capabilities?.includes('vision');
 
   switch (provider) {
-    case 'claude':
+    case 'claude': {
+      const formattedMessages = messages.filter((m) => m.role !== 'system').map((m) => {
+        if (m.attachments && m.attachments.length > 0) {
+          const contentArray: any[] = [{ type: 'text', text: m.content || '' }];
+          for (const att of m.attachments) {
+            if (att.type === 'image' && att.content) {
+              const base64Data = att.content.split(',')[1];
+              if (base64Data) {
+                contentArray.push({
+                  type: 'image',
+                  source: {
+                    type: 'base64',
+                    media_type: att.mime || 'image/jpeg',
+                    data: base64Data
+                  }
+                });
+              }
+            }
+          }
+          return { role: m.role, content: contentArray };
+        }
+        return { role: m.role, content: m.content };
+      });
+
       return {
         model: apiModelId,
         max_tokens: model?.maxTokens ?? 4096,
         system,
-        messages: messages.filter((m) => m.role !== 'system'),
+        messages: formattedMessages,
         stream: true,
       };
-    case 'gemini':
+    }
+    case 'gemini': {
+      const contents = messages.map((m) => {
+        const parts: any[] = [{ text: m.content || '' }];
+        if (m.attachments && m.attachments.length > 0) {
+          if (!allowImages) {
+            const note = m.attachments.filter(a => a.type === 'image').map((a) => `[imagen omitida: ${a.name || 'adjunto'}]`).join(' ');
+            if (note) parts.push({ text: `\n${note}` });
+          } else {
+            for (const att of m.attachments) {
+              if (att.type === 'image' && att.content) {
+                const base64Data = att.content.split(',')[1];
+                if (base64Data) {
+                  parts.push({
+                    inlineData: {
+                      mimeType: att.mime || 'image/jpeg',
+                      data: base64Data
+                    }
+                  });
+                }
+              }
+            }
+          }
+        }
+        return {
+          role: m.role === 'assistant' ? 'model' : 'user',
+          parts,
+        };
+      });
+
       return {
         apiKey: useSettingsStore.getState().apiKeys.gemini,
         model: apiModelId,
         body: {
-          contents: messages.map((m) => ({
-            role: m.role === 'assistant' ? 'model' : 'user',
-            parts: [{ text: m.content }],
-          })),
+          contents,
           systemInstruction: { parts: [{ text: system }] },
         },
       };
+    }
     case 'openai':
     case 'deepseek':
     case 'nvidia':
     case 'openrouter':
     default: {
-      const formattedMessages = [...messages];
+      const needsFlatten = provider === 'nvidia' || provider === 'deepseek';
+      const formattedMessages = messages.map((m) => {
+        if (m.attachments && m.attachments.length > 0) {
+          const images = m.attachments.filter((a) => a.type === 'image' && a.content);
+          if (!allowImages && images.length > 0) {
+            const note = images.map((a) => `[imagen omitida: ${a.name || 'adjunto'}]`).join(' ');
+            return { role: m.role, content: `${m.content || ''}\n${note}`.trim() };
+          }
+
+          const contentArray: any[] = [{ type: 'text', text: m.content || '' }];
+          for (const att of images) {
+            contentArray.push({
+              type: 'image_url',
+              image_url: { url: att.content }
+            });
+          }
+
+          if (needsFlatten) {
+            const text = contentArray.map((part: any) => {
+              if (typeof part === 'string') return part;
+              if (part?.text) return part.text;
+              if (part?.type === 'text' && part?.text) return part.text;
+              if (part?.image_url?.url) return `[image:${part.image_url.url}]`;
+              return typeof part === 'object' ? JSON.stringify(part) : String(part ?? '');
+            }).join('\n');
+            return { role: m.role, content: text };
+          }
+          return { role: m.role, content: contentArray };
+        }
+        return { role: m.role, content: m.content };
+      });
+
       const firstUserMsgIndex = formattedMessages.findIndex(m => m.role === 'user');
       if (firstUserMsgIndex !== -1) {
-        formattedMessages[firstUserMsgIndex] = {
-          ...formattedMessages[firstUserMsgIndex],
-          content: `${system}\n\n---\n\n${formattedMessages[firstUserMsgIndex].content}`
-        };
+        const firstMsg = formattedMessages[firstUserMsgIndex];
+        if (Array.isArray(firstMsg.content)) {
+          // It's a structured message with image parts
+          const textPart = firstMsg.content.find((p: any) => p.type === 'text');
+          if (textPart) {
+            textPart.text = `${system}\n\n---\n\n${textPart.text}`;
+          } else {
+            firstMsg.content.unshift({ type: 'text', text: system });
+          }
+        } else {
+          // Plain string content
+          formattedMessages[firstUserMsgIndex] = {
+            ...firstMsg,
+            content: `${system}\n\n---\n\n${firstMsg.content}`
+          };
+        }
       } else {
         formattedMessages.unshift({ role: 'user', content: `${system}\n\n---\n\nPor favor inicia la sesión.` });
       }
+
       return {
         model: apiModelId,
         messages: formattedMessages,
@@ -356,16 +485,33 @@ function adaptiveSelectModel(userMessage: string, historyText: string, agentMode
 // Agent mode: stream via agentic loop
 // ═══════════════════════════════════════
 
-async function streamAgentChat(): Promise<void> {
+async function streamAgentChat(mentionedContext?: string): Promise<void> {
   const chatStore = useChatStore.getState();
   const settingsStore = useSettingsStore.getState();
   const editorState = useEditorStore.getState();
-  const { selectedModel, sessions, activeSessionId } = chatStore;
-
-  const system = buildSystemPrompt();
+  const { selectedModel, sessions, activeSessionId, leanContext, unlimitedAgent } = chatStore;
   
   let actualModelId = selectedModel;
   let model = AI_MODELS[actualModelId];
+  let system = buildSystemPrompt(undefined, leanContext, mentionedContext);
+
+  // Guard: if the selected model doesn't exist in the catalog, auto-select a valid one
+  if (!model) {
+    const { getFreeModels } = await import('@shared/models');
+    const freeModels = getFreeModels();
+    if (freeModels.length > 0) {
+      actualModelId = freeModels[0].id;
+      model = AI_MODELS[actualModelId];
+      chatStore.addMessage({
+        id: Date.now().toString(36), role: 'system',
+        content: `⚠️ El modelo **${selectedModel}** ya no existe en el catálogo. Se seleccionó automáticamente **${model.label}**.`,
+        timestamp: Date.now(), model: actualModelId,
+      });
+    } else {
+      chatStore.addMessage({ id: Date.now().toString(36), role: 'assistant', content: 'Error: no hay modelos disponibles en el catálogo.', timestamp: Date.now() });
+      return;
+    }
+  }
 
   if (selectedModel === 'adaptive') {
     const session = sessions.find((s) => s.id === activeSessionId);
@@ -385,6 +531,9 @@ async function streamAgentChat(): Promise<void> {
     });
   }
 
+  // Final system prompt with the chosen provider
+  system = buildSystemPrompt(model.provider, leanContext, mentionedContext);
+
   if (!model) {
     chatStore.addMessage({ id: Date.now().toString(36), role: 'assistant', content: 'Error: modelo no encontrado.', timestamp: Date.now() });
     return;
@@ -395,10 +544,16 @@ async function streamAgentChat(): Promise<void> {
 
   // Build messages
   const session = sessions.find((s) => s.id === activeSessionId);
+  const historyLimit = leanContext ? 4 : 8;
   const historyMessages = (session?.messages ?? [])
     .filter((m: any) => m.role !== 'system')
-    .slice(-20)
-    .map((m: any) => ({ role: m.role, content: m.content, attachments: m.attachments, reasoning_content: m.reasoning_content }));
+    .slice(-historyLimit)
+    .map((m: any) => ({
+      role: m.role,
+      content: truncateContent(m.content, leanContext ? 3000 : 6000),
+      attachments: m.attachments,
+      reasoning_content: m.reasoning_content
+    }));
 
   // Determine which API key to send
   const providerKey = apiKeys[model.provider] || '';
@@ -409,6 +564,7 @@ async function streamAgentChat(): Promise<void> {
   const activeGithubAccount = settingsState.activeGithubAccount;
   const activeAccount = githubAccounts.find((a: any) => a.username === activeGithubAccount) || githubAccounts[0];
 
+  const conservativeIters = model.provider === 'gemini' ? 6 : 15;
   const body = {
     messages: historyMessages,
     model: apiModelId,
@@ -416,7 +572,8 @@ async function streamAgentChat(): Promise<void> {
     system,
     projectRoot: editorState.rootPath || '',
     apiKey: providerKey,
-    maxIterations: 1000,
+    maxIterations: unlimitedAgent ? 50 : conservativeIters,
+    fastRetries: unlimitedAgent ? true : false,
     githubToken: activeAccount?.token || '',
     sessionId: activeSessionId || '',
   };
@@ -440,6 +597,29 @@ async function streamAgentChat(): Promise<void> {
 
     if (!res.ok) {
       const errText = await res.text();
+
+      // Gemini quota fallback on 429
+      if (model.provider === 'gemini' && res.status === 429) {
+        const lower = errText.toLowerCase();
+        const quota = lower.includes('quota') || lower.includes('prepayment credits') || lower.includes('exhausted') || lower.includes('resource_exhausted');
+        if (quota) {
+          // try a free-lite variant if different
+          const fallbackId = 'gemini-2.5-flash-lite';
+          if (fallbackId !== selectedModel) {
+            chatStore.addMessage({
+              id: Date.now().toString(36), role: 'assistant',
+              content: `⚠️ El modelo Gemini devolvió 429 (cuota). Probando con ${fallbackId}...`,
+              timestamp: Date.now(), model: selectedModel,
+            });
+            chatStore.setSelectedModel(fallbackId);
+            chatStore.setStreaming(false);
+            // re-dispatch the same prompt with fallback
+            await streamChat('');
+            return;
+          }
+        }
+      }
+
       chatStore.addMessage({
         id: Date.now().toString(36), role: 'assistant',
         content: `Error ${res.status}: ${errText.slice(0, 200)}`,
@@ -500,6 +680,7 @@ async function streamAgentChat(): Promise<void> {
       content: finalContent,
       timestamp: Date.now(), model: actualModelId,
       agentChanges: agentChanges.length > 0 ? agentChanges : undefined,
+      toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
     });
 
     const promptTokens = Math.ceil((system.length + JSON.stringify(historyMessages).length) / 4);
@@ -510,15 +691,17 @@ async function streamAgentChat(): Promise<void> {
 
   } catch (e: any) {
     if (e.name !== 'AbortError') {
+      const msg = e?.message?.includes('Failed to fetch') ? 'No se pudo conectar al proveedor (posible red o CORS). Intenta de nuevo o cambia de modelo.' : e.message;
       chatStore.addMessage({
         id: Date.now().toString(36), role: 'assistant',
-        content: `Error: ${e.message}`,
+        content: `Error: ${msg}`,
         timestamp: Date.now(), model: selectedModel,
       });
     }
   } finally {
     chatStore.setStreaming(false);
     chatStore.setStreamContent('');
+    chatStore.setAgentStatus(null);
     chatStore.setAbortController(null);
   }
 }
@@ -530,12 +713,18 @@ function handleAgentEvent(
   agentChanges: { path: string; oldContent: string; newContent: string }[],
   appendContent: (text: string) => void,
 ): void {
+  const chatStore = useChatStore.getState();
   switch (event) {
     case 'status':
       if (data.type === 'thinking') {
-        appendContent(`⏳ ...\n\n`);
+        chatStore.setAgentStatus({ type: 'thinking' });
       } else if (data.type === 'rate_limit') {
-        appendContent(`⚠️ Límite de peticiones alcanzado (429). Reintentando en ${(data.delay / 1000).toFixed(1)}s... (Intento ${data.attempt}/${data.maxAttempts})\n\n`);
+        chatStore.setAgentStatus({
+          type: 'rate_limit',
+          delay: data.delay,
+          attempt: data.attempt,
+          maxAttempts: data.maxAttempts
+        });
       }
       break;
 
@@ -546,6 +735,7 @@ function handleAgentEvent(
         args: data.args,
         status: 'running',
       });
+      chatStore.setAgentStatus({ type: 'tool_call', message: `${data.name}` });
       {
         const icon = data.name === 'read_file' ? '📖' : data.name === 'write_file' ? '✏️' : data.name === 'list_files' ? '📁' : data.name === 'search_files' ? '🔍' : '⚡';
         appendContent(`${icon} Ejecutando \`${data.name}\`(${formatToolArgs(data.args)})...\n`);
@@ -558,7 +748,22 @@ function handleAgentEvent(
         tc.status = 'done';
         tc.result = data.result;
       }
+      chatStore.setAgentStatus(null);
       appendContent(`✅ Resultado recibido\n\n`);
+      break;
+    }
+
+    case 'content': {
+      if (typeof data?.text === 'string') {
+        appendContent(data.text);
+      }
+      break;
+    }
+
+    case 'error': {
+      const msg = data?.message || 'Error del agente';
+      appendContent(`\n\n❌ ${msg}\n`);
+      chatStore.setAgentStatus(null);
       break;
     }
 
@@ -604,15 +809,6 @@ function handleAgentEvent(
       break;
     }
 
-    case 'content':
-      // Clear the "thinking" prefix and show actual content
-      appendContent(data.text || '');
-      break;
-
-    case 'error':
-      appendContent(`\n❌ Error: ${data.message}\n`);
-      break;
-
     case 'done':
       // Stream complete
       break;
@@ -636,15 +832,34 @@ function formatToolArgs(args: Record<string, unknown>): string {
 // Non-agent mode: direct streaming (legacy)
 // ═══════════════════════════════════════
 
-async function streamDirectChat(): Promise<void> {
+async function streamDirectChat(overrideModelId?: string, mentionedContext?: string): Promise<void> {
   const chatStore = useChatStore.getState();
   const settingsStore = useSettingsStore.getState();
-  const { selectedModel, sessions, activeSessionId } = chatStore;
+  const { sessions, activeSessionId, leanContext } = chatStore;
+  const selectedModel = overrideModelId || chatStore.selectedModel;
 
-  const system = buildSystemPrompt();
+  let system = buildSystemPrompt(undefined, leanContext, mentionedContext);
 
   let actualModelId = selectedModel;
   let model = AI_MODELS[actualModelId];
+
+  // Guard: if the selected model doesn't exist in the catalog, auto-select a valid one
+  if (!model) {
+    const { getFreeModels } = await import('@shared/models');
+    const freeModels = getFreeModels();
+    if (freeModels.length > 0) {
+      actualModelId = freeModels[0].id;
+      model = AI_MODELS[actualModelId];
+      chatStore.addMessage({
+        id: Date.now().toString(36), role: 'system',
+        content: `⚠️ El modelo **${selectedModel}** ya no existe. Se usará **${model.label}** automáticamente.`,
+        timestamp: Date.now(), model: actualModelId,
+      });
+    } else {
+      chatStore.addMessage({ id: Date.now().toString(36), role: 'assistant', content: 'Error: no hay modelos disponibles.', timestamp: Date.now() });
+      return;
+    }
+  }
 
   if (selectedModel === 'adaptive') {
     const session = sessions.find((s) => s.id === activeSessionId);
@@ -662,6 +877,37 @@ async function streamDirectChat(): Promise<void> {
       timestamp: Date.now(),
       model: actualModelId
     });
+  }
+
+  // Session and history (needed for attachments detection)
+  const session = sessions.find((s) => s.id === activeSessionId);
+  const historyLimit = leanContext ? 4 : 8;
+  const historyMessages = (session?.messages ?? [])
+    .filter((m) => m.role !== 'system')
+    .slice(-historyLimit)
+    .map((m: any) => ({
+      role: m.role,
+      content: truncateContent(m.content, leanContext ? 3000 : 6000),
+      attachments: m.attachments,
+      reasoning_content: m.reasoning_content
+    }));
+
+  // Auto-fallback to a vision model if there are images
+  const hasImages = historyMessages.some((m: any) => m.attachments?.some((a: any) => a.type === 'image'));
+  if (hasImages && !model?.capabilities?.includes('vision')) {
+    const fallbackId = findVisionFallback();
+    if (fallbackId && fallbackId !== actualModelId) {
+      actualModelId = fallbackId;
+      model = AI_MODELS[actualModelId];
+      system = buildSystemPrompt(model.provider, leanContext, mentionedContext);
+      chatStore.addMessage({
+        id: Date.now().toString(36),
+        role: 'assistant',
+        content: `🔀 Cambié a **${model.label}** porque hay imágenes y el modelo anterior no soporta visión.`,
+        timestamp: Date.now(),
+        model: actualModelId,
+      });
+    }
   }
 
   if (!model) {
@@ -690,12 +936,6 @@ async function streamDirectChat(): Promise<void> {
   
   const { path, headers } = getProviderConfig(provider, apiKeys);
 
-  const session = sessions.find((s) => s.id === activeSessionId);
-  const historyMessages = (session?.messages ?? [])
-    .filter((m) => m.role !== 'system')
-    .slice(-20)
-    .map((m: any) => ({ role: m.role, content: m.content, attachments: m.attachments, reasoning_content: m.reasoning_content }));
-
   const body = buildRequestBody(provider, actualModelId, historyMessages, system);
 
   chatStore.setStreaming(true);
@@ -707,9 +947,57 @@ async function streamDirectChat(): Promise<void> {
 
     if (!res.ok) {
       const errText = await res.text();
+      const errStatus = res.status;
+      
+      // Attempt fallback if it's a 404 (model not found) and we have an adaptive fallback logic available
+      if (errStatus === 404 || errStatus === 402) {
+        console.warn(`[AI-Stream] Model ${selectedModel} failed with ${errStatus}. Retrying with adaptive fallback...`);
+        const { getFreeModels, getModelsByProvider } = await import('@shared/models');
+        const modelDef = Object.values((await import('@shared/models')).AI_MODELS).find(m => m.id === selectedModel);
+        let fallbackModel = null;
+        
+        if (modelDef && modelDef.tier === 'free') {
+          const providerModels = getModelsByProvider(modelDef.provider).filter(m => m.tier === 'free' && m.id !== selectedModel);
+          fallbackModel = providerModels.length > 0 ? providerModels[0].id : getFreeModels().find(m => m.id !== selectedModel)?.id;
+        }
+
+        if (fallbackModel) {
+          chatStore.addMessage({
+            id: Date.now().toString(36), role: 'system',
+            content: `El modelo **${selectedModel}** no está disponible o no existe. Usando **${fallbackModel}** automáticamente...`,
+            timestamp: Date.now(), model: fallbackModel,
+          });
+          // re-call self recursively with the new model
+          await streamDirectChat(fallbackModel);
+          return;
+        }
+      }
+
+      let friendly = `Error ${res.status}`;
+      let detail = errText.slice(0, 300);
+      try {
+        const parsedErr = JSON.parse(errText);
+        if (parsedErr.message) {
+          friendly = parsedErr.message;
+          detail = parsedErr.detail || '';
+        } else if (parsedErr.error && typeof parsedErr.error === 'string') {
+          friendly = parsedErr.error;
+        } else if (parsedErr.error?.message) {
+          friendly = parsedErr.error.message;
+        }
+      } catch {}
+
+      if (res.status === 429 && friendly.startsWith('Error 429')) {
+        friendly = '⚠️ Límite de peticiones del proveedor. Espera unos segundos o cambia de modelo.';
+      } else if (res.status === 404 && errText.toLowerCase().includes('image')) {
+        friendly = 'El modelo no soporta imágenes. Cambia a uno con visión (gpt-4o, gpt-4o-mini, gemini-1.5) o envía sin adjuntos.';
+      } else if (res.status >= 500 && friendly.startsWith('Error ')) {
+        friendly = 'El proveedor devolvió un error interno. Intenta de nuevo o prueba otro modelo.';
+      }
+
       chatStore.addMessage({
         id: Date.now().toString(36), role: 'assistant',
-        content: `Error ${res.status}: ${errText.slice(0, 200)}`,
+        content: detail ? `${friendly}\n\nDetalle: ${detail}` : friendly,
         timestamp: Date.now(), model: selectedModel,
       });
       chatStore.setStreaming(false);
@@ -767,17 +1055,17 @@ async function streamDirectChat(): Promise<void> {
 // ═══════════════════════════════════════
 
 /** Main entry point — delegates to agent loop or direct streaming */
-export async function streamChat(_userMessage: string): Promise<void> {
+export async function streamChat(_userMessage: string, mentionedContext?: string): Promise<void> {
   const { agentMode } = useChatStore.getState();
   const editorState = useEditorStore.getState();
 
   // Use agentic loop when agent mode is ON and we have a project root
   if (agentMode && editorState.rootPath) {
-    return streamAgentChat();
+    return streamAgentChat(mentionedContext);
   }
 
   // Otherwise use direct streaming (legacy)
-  return streamDirectChat();
+  return streamDirectChat(undefined, mentionedContext);
 }
 
 /** Parse an SSE chunk from different providers */

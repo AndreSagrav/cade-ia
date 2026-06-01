@@ -4,6 +4,7 @@ import { execSync, spawn, ChildProcess } from 'child_process';
 import { join, resolve, dirname } from 'path';
 import { config } from '../config';
 import type { AIProvider } from '@shared/types';
+import { getModelsByProvider, AI_MODELS } from '@shared/models';
 
 export const agentRouter = Router();
 
@@ -127,6 +128,12 @@ const TOOL_DEFS = [
   },
 ];
 
+function maskKey(key: string | undefined | null): string {
+  if (!key) return 'none';
+  const tail = key.slice(-4);
+  return `***${tail}`;
+}
+
 // ═══════════════════════════════════════
 // Tool execution
 // ═══════════════════════════════════════
@@ -145,6 +152,9 @@ async function executeTool(
   args: Record<string, unknown>,
   projectRoot: string,
 ): Promise<{ result: string; fileChange?: { path: string; content: string; oldContent?: string } }> {
+  if (args && args._error) {
+    return { result: `Error: No se pudieron procesar los argumentos de la herramienta. Detalle: ${args._error}. Asegúrate de enviar los argumentos exactamente en el formato JSON requerido sin caracteres inválidos ni saltos de línea sin escapar.` };
+  }
   try {
     switch (name) {
       case 'read_file': {
@@ -440,8 +450,29 @@ interface ProviderAdapter {
   buildToolResult(toolCallId: string, toolName: string, result: string): any;
 }
 
+function stringifyContentParts(content: any): string {
+  if (Array.isArray(content)) {
+    return content.map((part: any) => {
+      if (typeof part === 'string') return part;
+      if (part?.text) return part.text;
+      if (part?.type === 'text' && part?.text) return part.text;
+      if (part?.image_url?.url) return `[image:${part.image_url.url}]`;
+      if (part?.reasoning_content) return String(part.reasoning_content);
+      return typeof part === 'object' ? JSON.stringify(part) : String(part ?? '');
+    }).join('\n');
+  }
+  if (typeof content === 'object' && content !== null) return JSON.stringify(content);
+  return content ?? '';
+}
+
+function truncateText(text: string | undefined, max: number): string {
+  if (!text) return '';
+  return text.length > max ? text.slice(0, max) : text;
+}
+
 /** OpenAI-compatible adapter (OpenAI, DeepSeek, NVIDIA, OpenRouter) */
-function openaiAdapter(endpoint: string, extra?: Record<string, string>): ProviderAdapter {
+function openaiAdapter(endpoint: string, extra?: Record<string, string>, options?: { flattenContent?: boolean }): ProviderAdapter {
+  const flattenContent = !!options?.flattenContent;
   return {
     buildBody(model, messages, system) {
       const formattedMessages = messages.map((m: any) => {
@@ -454,8 +485,23 @@ function openaiAdapter(endpoint: string, extra?: Record<string, string>): Provid
           }
           return { role: m.role, content, reasoning_content: m.reasoning_content };
         }
-        return { role: m.role, content: m.content, name: m.name, tool_calls: m.tool_calls, tool_call_id: m.tool_call_id, reasoning_content: m.reasoning_content };
+        return {
+          role: m.role,
+          content: truncateText(m.content, 6000),
+          name: m.name,
+          tool_calls: m.tool_calls,
+          tool_call_id: m.tool_call_id,
+          reasoning_content: m.reasoning_content,
+        };
       });
+
+      if (flattenContent) {
+        for (const msg of formattedMessages) {
+          if (Array.isArray((msg as any).content)) {
+            (msg as any).content = stringifyContentParts((msg as any).content);
+          }
+        }
+      }
 
       // Prepend the system prompt directly to the first user message
       // This is a bulletproof way to ensure open-source models (like Qwen on NVIDIA)
@@ -582,10 +628,8 @@ const geminiAdapter: ProviderAdapter = {
             }
           }
         }
-        return {
-          role: m.role === 'assistant' || m.role === 'model' ? 'model' : m.role === 'function' ? 'function' : 'user',
-          parts,
-        };
+        const role = (m.role === 'assistant' || m.role === 'model') ? 'model' : (m.role === 'function' ? 'function' : 'user');
+        return { role, parts };
       }),
       systemInstruction: { parts: [{ text: system }] },
       tools: [{ functionDeclarations: TOOL_DEFS.map((t) => ({ name: t.name, description: t.description, parameters: t.parameters })) }],
@@ -621,11 +665,13 @@ const geminiAdapter: ProviderAdapter = {
 };
 
 function getAdapter(provider: AIProvider): ProviderAdapter {
+  // DeepSeek y NVIDIA no soportan content arrays ni image parts → aplanar
+  const flatten = provider === 'nvidia' || provider === 'deepseek';
   switch (provider) {
     case 'claude': return claudeAdapter;
     case 'openai': return openaiAdapter('https://api.openai.com/v1/chat/completions');
-    case 'deepseek': return openaiAdapter('https://api.deepseek.com/chat/completions');
-    case 'nvidia': return openaiAdapter('https://integrate.api.nvidia.com/v1/chat/completions');
+    case 'deepseek': return openaiAdapter('https://api.deepseek.com/chat/completions', undefined, { flattenContent: flatten });
+    case 'nvidia': return openaiAdapter('https://integrate.api.nvidia.com/v1/chat/completions', undefined, { flattenContent: flatten });
     case 'openrouter': return openaiAdapter('https://openrouter.ai/api/v1/chat/completions', {
       'HTTP-Referer': 'https://codeai.studio', 'X-Title': 'CodeAI Studio',
     });
@@ -655,20 +701,35 @@ async function fetchWithRetry(
   url: string,
   options: RequestInit,
   onRetry?: (attempt: number, delayMs: number, errorMsg: string) => void,
-  onHeartbeat?: () => void
+  onHeartbeat?: () => void,
+  cfg?: { maxAttempts?: number; initialDelayMs?: number; capDelayMs?: number }
 ): Promise<globalThis.Response> {
   let attempt = 0;
-  const maxAttempts = 10;
-  let delay = 2000;
+  const maxAttempts = cfg?.maxAttempts ?? 3; // Reduced from 10 to 3 to fail fast and avoid long hangs
+  let delay = cfg?.initialDelayMs ?? 2000;
+  const capDelay = cfg?.capDelayMs ?? 30000;
 
   while (true) {
     attempt++;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 90000); // 90-second timeout per request
+
     try {
-      const response = await fetch(url, options);
+      const response = await fetch(url, {
+        ...options,
+        signal: controller.signal
+      });
+      clearTimeout(timeoutId);
 
       if (response.status === 429 && attempt < maxAttempts) {
         const errText = await response.clone().text().catch(() => '');
         const errMsg = errText || response.statusText || 'Too Many Requests';
+        
+        const lowerErr = errMsg.toLowerCase();
+        if (lowerErr.includes('quota') || lowerErr.includes('exhausted') || lowerErr.includes('balance') || lowerErr.includes('insufficient')) {
+          // Do not retry if the quota is exhausted (e.g. Gemini free tier limit reached)
+          return response;
+        }
         
         let waitMs = delay;
         const retryAfter = response.headers.get('retry-after') || response.headers.get('x-retry-after');
@@ -689,7 +750,9 @@ async function fetchWithRetry(
           } catch {}
         }
         
-        const actualWait = Math.max(waitMs, delay);
+        const baseWait = Math.max(waitMs, delay);
+        const jitter = Math.floor(baseWait * (0.15 + Math.random() * 0.1));
+        const actualWait = Math.max(250, Math.min(baseWait - jitter, capDelay));
 
         if (onRetry) {
           onRetry(attempt, actualWait, errMsg);
@@ -707,15 +770,20 @@ async function fetchWithRetry(
           }
         }
         
-        delay = Math.min(delay * 2, 30000);
+        delay = Math.min(Math.max(delay * 1.6, 800), capDelay);
         continue;
       }
 
       return response;
     } catch (err: any) {
+      clearTimeout(timeoutId);
+      const errMsg = err.name === 'AbortError' 
+        ? 'Tiempo de espera agotado al conectar con el proveedor (90s)' 
+        : (err.message || 'Network Error');
+
       if (attempt < maxAttempts) {
         if (onRetry) {
-          onRetry(attempt, delay, err.message || 'Network Error');
+          onRetry(attempt, delay, errMsg);
         }
 
         const interval = 2000;
@@ -729,10 +797,10 @@ async function fetchWithRetry(
           }
         }
 
-        delay = Math.min(delay * 2, 30000);
+        delay = Math.min(Math.max(delay * 1.6, 800), capDelay);
         continue;
       }
-      throw err;
+      throw new Error(errMsg);
     }
   }
 }
@@ -760,7 +828,8 @@ agentRouter.post('/interrupt', (req: Request, res: Response) => {
 // ═══════════════════════════════════════
 
 agentRouter.post('/', async (req: Request, res: Response) => {
-  const { messages, model, provider, system, projectRoot, maxIterations = 1000, githubToken, sessionId } = req.body;
+  const { messages, model, provider, system, projectRoot, maxIterations = 200, githubToken, sessionId, fastRetries = false } = req.body;
+  let currentModel: string = model;
 
   // Store GitHub token for git tools
   if (githubToken) (global as any).__codeai_github_token__ = githubToken;
@@ -779,6 +848,10 @@ agentRouter.post('/', async (req: Request, res: Response) => {
     return res.status(401).json({ error: `No API key configured for provider: ${provider}` });
   }
 
+  if (provider === 'gemini') {
+    console.log(`[CodeAI][GeminiDebug] Using key ${maskKey(apiKey)} for model ${currentModel}`);
+  }
+
   // SSE setup
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
@@ -789,12 +862,47 @@ agentRouter.post('/', async (req: Request, res: Response) => {
     res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
   };
 
+  // Connection close/abort detector
+  let clientAborted = false;
+  req.on('close', () => {
+    clientAborted = true;
+    console.log(`[CodeAI Server] El cliente cerró la conexión para sesión "${sessionId || 'unknown'}". Deteniendo bucle del agente.`);
+  });
+
   const adapter = getAdapter(provider);
-  let conversationMessages = [...messages];
+  
+  // Filter images for models that don't support vision
+  const modelDef = Object.values(AI_MODELS).find(m => m.apiModelId === currentModel || m.id === currentModel);
+  const allowImages = !!modelDef?.capabilities?.includes('vision');
+
+  let convMessages = [...messages].map(m => {
+    if (m.attachments && m.attachments.length > 0 && !allowImages) {
+      const images = m.attachments.filter((a: any) => a.type === 'image');
+      if (images.length > 0) {
+        const note = images.map((a: any) => `[imagen omitida: ${a.name || 'adjunto'}]`).join(' ');
+        const nonImages = m.attachments.filter((a: any) => a.type !== 'image');
+        return {
+          ...m,
+          content: `${m.content || ''}\n${note}`.trim(),
+          attachments: nonImages.length > 0 ? nonImages : undefined
+        };
+      }
+    }
+    return m;
+  });
+
   let iteration = 0;
+  const iterationCap = Math.min(Math.max(maxIterations || 1, 1), 35);
+  const toolHistory: string[] = [];
+  const triedModels = new Set<string>([currentModel]);
 
   try {
-    while (iteration < maxIterations) {
+    while (iteration < iterationCap) {
+      if (clientAborted) {
+        console.log(`[CodeAI Server] Deteniendo ejecución del agente debido a desconexión del cliente.`);
+        break;
+      }
+
       iteration++;
 
       // Check for user interruptions (human-in-the-loop)
@@ -802,7 +910,7 @@ agentRouter.post('/', async (req: Request, res: Response) => {
         const queue = pendingInterruptions.get(sessionId)!;
         if (queue.length > 0) {
           const userMsg = queue.shift()!;
-          conversationMessages.push({
+          convMessages.push({
             role: 'user',
             content: userMsg
           } as any);
@@ -812,9 +920,17 @@ agentRouter.post('/', async (req: Request, res: Response) => {
         }
       }
 
+      // Pacing gap between iterations (shorter for Gemini or fastRetries)
+      const isGemini = provider === 'gemini';
+      const fast = fastRetries || isGemini;
+      if (iteration > 1 && (isGemini || currentModel.includes('free') || currentModel.includes('lite'))) {
+        const gap = fast ? 350 : 1200;
+        await new Promise((resolve) => setTimeout(resolve, gap));
+      }
+
       // Call the AI provider (non-streaming to get full response with tool calls)
-      const body = adapter.buildBody(model, conversationMessages, system || '');
-      const endpoint = adapter.getEndpoint(model);
+      const body = adapter.buildBody(currentModel, convMessages, system || '');
+      const endpoint = adapter.getEndpoint(currentModel);
       const headers = adapter.getHeaders(apiKey);
 
       // For Gemini, add apiKey as query param
@@ -836,18 +952,77 @@ agentRouter.post('/', async (req: Request, res: Response) => {
           sendEvent('status', {
             type: 'rate_limit',
             attempt,
-            maxAttempts: 10,
+            maxAttempts: fast ? 6 : 3,
             delay: delayMs,
             message: errMsg,
           });
         },
         () => {
           sendEvent('status', { type: 'heartbeat' });
-        }
+        },
+        fast ? { maxAttempts: 6, initialDelayMs: 600, capDelayMs: 6000 } : undefined
       );
 
       if (!response.ok) {
-        const errText = await response.text();
+        const errText = await response.text().catch(() => '');
+
+        if (provider === 'gemini') {
+          console.log(`[CodeAI][GeminiDebug] status=${response.status} model=${currentModel} key=${maskKey(apiKey)} errText=${errText.slice(0,200)}`);
+        }
+
+        // Auto-fallback for Gemini if the model fails (e.g. paywalled or quota 429)
+        if (provider === 'gemini') {
+          const status = response.status;
+          if (status === 429 || status === 403 || status === 400) {
+            const fallbacks = [
+              'gemini-2.5-flash-lite-free',
+              'gemini-2.5-flash-free',
+              'gemini-2.5-pro-free',
+            ];
+            const next = fallbacks.find((id) => {
+              const apiId = AI_MODELS[id]?.apiModelId;
+              return apiId && !triedModels.has(apiId);
+            });
+            if (next) {
+              const fb = AI_MODELS[next];
+              sendEvent('status', { type: 'note', message: `Gemini devolvió ${status} para "${currentModel}". Probando fallback "${fb.label}"...` });
+              currentModel = fb.apiModelId;
+              triedModels.add(currentModel);
+              iteration--;
+              continue;
+            }
+            if (status === 429) {
+              const msg = errText || 'Se agotó la cuota de la API Key de Gemini (429). Usa otra key o espera la ventana diaria.';
+              sendEvent('error', { message: msg.slice(0, 400) });
+              break;
+            }
+          }
+        }
+
+        // Auto-fallback for OpenRouter and NVIDIA when a free endpoint is unavailable or paywalled
+        if ((provider === 'openrouter' || provider === 'nvidia') && (response.status === 404 || response.status === 402)) {
+          const catalog = getModelsByProvider(provider).filter((m) => m.tier === 'free');
+          const candidate = catalog.find(m => m.apiModelId && !triedModels.has(m.apiModelId))?.apiModelId;
+          
+          if (candidate) {
+            sendEvent('status', { type: 'note', message: `${provider} devolvió ${response.status} para "${currentModel}". Probando fallback "${candidate}"...` });
+            currentModel = candidate;
+            triedModels.add(currentModel);
+            // restart this iteration quickly with the new model
+            iteration--; // do not count a failed attempt as an iteration
+            continue;
+          }
+        }
+
+        // Handle Gemini 429 quota exhaustion specifically
+        if (provider === 'gemini' && response.status === 429) {
+          const isQuota = errText.toLowerCase().includes('quota') || errText.toLowerCase().includes('exhausted') || errText.toLowerCase().includes('resource');
+          if (isQuota) {
+            sendEvent('error', { message: 'Se agotó la cuota gratuita de tu API Key de Gemini. Espera 1 minuto a que se renueve la cuota por minuto, o cambia de modelo.' });
+            break;
+          }
+        }
+
         sendEvent('error', { message: `API error ${response.status}: ${errText.slice(0, 300)}` });
         break;
       }
@@ -877,6 +1052,17 @@ agentRouter.post('/', async (req: Request, res: Response) => {
             id: `xml-write-${Date.now()}-${xmlToolCalls.length}`,
             name: 'write_file',
             args: { path: match[1], content: match[2] }
+          });
+        }
+
+        // 2b. Check for unclosed write_file tag due to token/timeout truncation
+        const unclosedWriteRegex = /<write_file\s+path=["']([^"']+)["']\s*>([\s\S]*)$/i;
+        const unclosedMatch = unclosedWriteRegex.exec(parsed.text);
+        if (unclosedMatch && !parsed.text.includes('</write_file>')) {
+          xmlToolCalls.push({
+            id: `xml-write-unclosed-${Date.now()}`,
+            name: 'write_file',
+            args: { path: unclosedMatch[1], content: unclosedMatch[2], _unclosed: true }
           });
         }
 
@@ -925,18 +1111,44 @@ agentRouter.post('/', async (req: Request, res: Response) => {
 
         // Add the assistant message to conversation (with tool calls)
         if (provider === 'claude') {
-          conversationMessages.push({ role: 'assistant', content: json.content });
+          convMessages.push({ role: 'assistant', content: json.content });
         } else if (provider === 'gemini') {
-          conversationMessages.push({
+          convMessages.push({
             role: 'model',
             parts: json.candidates[0].content.parts,
           });
         } else {
-          conversationMessages.push(json.choices[0].message);
+          convMessages.push(json.choices[0].message);
         }
 
         // Execute each tool call
+        let loopDetected = false;
         for (const tc of parsed.toolCalls) {
+          const toolSignature = `${tc.name}:${JSON.stringify(tc.args)}`;
+          toolHistory.push(toolSignature);
+          
+          // Pre-detect loops (2 identical calls in a row) to inject a warning and help the model break the cycle
+          if (toolHistory.length >= 2) {
+            const last2 = toolHistory.slice(-2);
+            if (last2[0] === last2[1]) {
+              sendEvent('status', { type: 'note', message: `⚠️ Repetición detectada en "${tc.name}". Inyectando alerta de autocorrección...` });
+              convMessages.push({
+                role: 'user',
+                content: `[SISTEMA - ADVERTENCIA DE AUTOCORRECCIÓN]: Has ejecutado la herramienta "${tc.name}" con los mismos argumentos de manera consecutiva. Si la acción ya se realizó (por ejemplo, el archivo ya se guardó con éxito), NO la repitas de nuevo. Procede con el siguiente paso de tu plan, refactoriza o reporta el resultado al usuario para concluir.`
+              } as any);
+            }
+          }
+
+          // Detect infinite loops (3 identical calls in a row)
+          if (toolHistory.length >= 3) {
+            const last3 = toolHistory.slice(-3);
+            if (last3[0] === last3[1] && last3[1] === last3[2]) {
+              loopDetected = true;
+              sendEvent('error', { message: `Loop infinito detectado. El modelo está repitiendo la misma herramienta: ${tc.name}` });
+              break;
+            }
+          }
+
           sendEvent('tool_call', {
             id: tc.id,
             name: tc.name,
@@ -958,16 +1170,22 @@ agentRouter.post('/', async (req: Request, res: Response) => {
           // Add tool result to conversation
           const isXml = tc.id.startsWith('xml-');
           if (isXml) {
+            let contentMsg = `[SISTEMA - RESULTADO DE HERRAMIENTA]:\nLa herramienta "${tc.name}" fue ejecutada con éxito.\nResultado:\n${result}`;
+            if (tc.args && tc.args._unclosed) {
+              contentMsg += `\n\n⚠️ [ALERTA DE TRUNCADO DE TOKENS]: Tu respuesta anterior se interrumpió abruptamente debido al límite de tokens del proveedor de IA o tiempo de espera mientras escribías el archivo "${tc.args.path}". He guardado el contenido parcial con éxito para evitar perder tu trabajo. Por favor, CONTINÚA escribiendo el código restante para "${tc.args.path}" exactamente desde la línea donde te quedaste (reanudando la sintaxis rota) y asegúrate de cerrar la etiqueta </write_file> cuando termines el archivo.`;
+            }
             // Push as a user message to avoid API schema errors on tool role
-            conversationMessages.push({
+            convMessages.push({
               role: 'user',
-              content: `[SISTEMA - RESULTADO DE HERRAMIENTA]:\nLa herramienta "${tc.name}" fue ejecutada con éxito.\nResultado:\n${result}`
-            });
+              content: contentMsg
+            } as any);
           } else {
             const toolMsg = adapter.buildToolResult(tc.id, tc.name, result);
-            conversationMessages.push(toolMsg);
+            convMessages.push(toolMsg);
           }
         }
+        
+        if (loopDetected) break;
 
         // Continue the loop — the AI will see the tool results
         continue;
@@ -980,8 +1198,8 @@ agentRouter.post('/', async (req: Request, res: Response) => {
       break;
     }
 
-    if (iteration >= maxIterations) {
-      sendEvent('content', { text: '\n\n⚠️ Se alcanzó el límite de iteraciones del agente.' });
+    if (iteration >= iterationCap) {
+      sendEvent('content', { text: `\n\n⚠️ Se alcanzó el límite de iteraciones del agente (${iterationCap}).` });
     }
   } catch (e: any) {
     sendEvent('error', { message: `Agent error: ${e.message}` });

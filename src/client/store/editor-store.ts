@@ -16,6 +16,8 @@ interface EditorState {
   // Changes
   pendingChanges: PendingChange[];
   
+  activeSelection: { text: string; path: string; startLine: number; endLine: number } | null;
+  
   // UI
   folderPickerOpen: boolean;
 
@@ -40,6 +42,7 @@ interface EditorState {
   /** Mark preview as accepted (clears originalContent so changes are kept) */
   commitPreview: (path: string) => void;
   setFolderPickerOpen: (open: boolean) => void;
+  setActiveSelection: (selection: { text: string; path: string; startLine: number; endLine: number } | null) => void;
   reset: () => void;
 }
 
@@ -52,6 +55,7 @@ const initialState = {
   contextFiles: new Set<string>(),
   pendingChanges: [],
   folderPickerOpen: false,
+  activeSelection: null,
 };
 
 export const useEditorStore = create<EditorState>()(
@@ -165,6 +169,8 @@ export const useEditorStore = create<EditorState>()(
       },
 
       setFolderPickerOpen: (open) => set({ folderPickerOpen: open }),
+
+      setActiveSelection: (selection) => set({ activeSelection: selection }),
 
       reset: () => set(initialState),
     }),

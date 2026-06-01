@@ -20,6 +20,11 @@ export function App() {
 
   // Verify session on mount via Supabase
   useEffect(() => {
+    let timeoutId: ReturnType<typeof setTimeout> | null = setTimeout(() => {
+      console.warn('[CodeAI] ⏳ Supabase auth check tardó demasiado; continuando sin sesión');
+      setAuthChecked(true);
+    }, 7000);
+
     import('./lib/supabase').then(({ supabase }) => {
       // Use getUser() instead of getSession() — getUser() always returns fresh metadata from the server
       supabase.auth.getUser().then(({ data: { user } }) => {
@@ -31,9 +36,17 @@ export function App() {
             console.log('[CodeAI] ✅ API keys cargadas desde Supabase:', Object.keys(keys).filter(k => keys[k]).join(', ') || 'ninguna');
           }
         }
+        if (timeoutId) {
+          clearTimeout(timeoutId);
+          timeoutId = null;
+        }
         setAuthChecked(true);
       }).catch((err) => {
         console.error('[CodeAI] ❌ Error verificando sesión de Supabase:', err);
+        if (timeoutId) {
+          clearTimeout(timeoutId);
+          timeoutId = null;
+        }
         setAuthChecked(true); // Always unblock the UI!
       });
 
@@ -54,7 +67,21 @@ export function App() {
           setAuthenticated(false);
         }
       });
+    }).catch((err) => {
+      console.error('[CodeAI] ❌ No se pudo cargar Supabase:', err);
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+        timeoutId = null;
+      }
+      setAuthChecked(true);
     });
+
+    return () => {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+        timeoutId = null;
+      }
+    };
   }, []);
 
   useEffect(() => {

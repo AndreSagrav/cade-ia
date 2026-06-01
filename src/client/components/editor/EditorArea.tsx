@@ -28,6 +28,29 @@ export function EditorArea() {
         }
       },
     );
+
+    // Track active selection for @selection mentions
+    editor.onDidChangeCursorSelection(() => {
+      const model = editor.getModel();
+      const path = useEditorStore.getState().activeFilePath;
+      if (!model || !path) {
+        useEditorStore.getState().setActiveSelection(null);
+        return;
+      }
+
+      const selection = editor.getSelection();
+      if (!selection || selection.isEmpty()) {
+        useEditorStore.getState().setActiveSelection(null);
+      } else {
+        const text = model.getValueInRange(selection);
+        useEditorStore.getState().setActiveSelection({
+          text,
+          path,
+          startLine: selection.startLineNumber,
+          endLine: selection.endLineNumber,
+        });
+      }
+    });
   }, [activeFilePath]);
 
   const handleEditorChange = useCallback(

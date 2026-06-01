@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
+import { persist, createJSONStorage } from 'zustand/middleware';
 import type { ChatMessage, ChatSession, Attachment } from '@shared/types';
 
 interface ChatState {
@@ -15,10 +15,13 @@ interface ChatState {
   isStreaming: boolean;
   streamContent: string;
   attachments: Attachment[];
+  leanContext: boolean;
+  agentStatus: { type: 'thinking' | 'rate_limit' | 'tool_call' | 'idle'; message?: string; delay?: number; attempt?: number; maxAttempts?: number } | null;
 
   // Mode
   agentMode: boolean;
   adaptiveMode: boolean;
+  unlimitedAgent: boolean;
 
   // Model
   selectedModel: string;
@@ -43,8 +46,11 @@ interface ChatState {
   addAttachment: (attachment: Attachment) => void;
   removeAttachment: (id: string) => void;
   clearAttachments: () => void;
+  setLeanContext: (enabled: boolean) => void;
+  setAgentStatus: (status: { type: 'thinking' | 'rate_limit' | 'tool_call' | 'idle'; message?: string; delay?: number; attempt?: number; maxAttempts?: number } | null) => void;
   setAgentMode: (enabled: boolean) => void;
   setAdaptiveMode: (enabled: boolean) => void;
+  setUnlimitedAgent: (enabled: boolean) => void;
   setSelectedModel: (model: string) => void;
   addRecentModel: (model: string) => void;
   incrementModelUsage: (modelId: string, tokens: number) => void;
@@ -68,8 +74,11 @@ export const useChatStore = create<ChatState>()(
       isStreaming: false,
       streamContent: '',
       attachments: [],
+      leanContext: false,
+      agentStatus: null,
       agentMode: false,
       adaptiveMode: false,
+      unlimitedAgent: false,
       selectedModel: 'gemini-2.5-flash',
       recentModels: [],
       modelUsage: {},
@@ -250,8 +259,13 @@ export const useChatStore = create<ChatState>()(
         set({ attachments: get().attachments.filter((a) => a.id !== id) }),
       clearAttachments: () => set({ attachments: [] }),
 
+      setLeanContext: (enabled) => set({ leanContext: enabled }),
+
+      setAgentStatus: (status) => set({ agentStatus: status }),
+
       setAgentMode: (enabled) => set({ agentMode: enabled }),
       setAdaptiveMode: (enabled) => set({ adaptiveMode: enabled }),
+      setUnlimitedAgent: (enabled) => set({ unlimitedAgent: enabled }),
 
       setSelectedModel: (model) => {
         set({ selectedModel: model });
@@ -266,6 +280,122 @@ export const useChatStore = create<ChatState>()(
     }),
     {
       name: 'codeai-chat-store',
+      storage: createJSONStorage(() => {
+        const safeStorage = {
+          getItem: (key: string) => {
+            try {
+              const v = localStorage.getItem(key);
+              if (v !== null) return v;
+            } catch (e) {
+              console.warn('[chat-store] getItem failed (localStorage). Trying sessionStorage.', e);
+            }
+            try {
+              return sessionStorage.getItem(key);
+            } catch {
+              return null;
+            }
+          },
+          setItem: (key: string, value: string) => {
+            const trySet = (payload: string): boolean => {
+              try {
+                localStorage.setItem(key, payload);
+                return true;
+              } catch (err) {
+                return false;
+              }
+            };
+
+            // 1) Direct attempt
+            if (trySet(value)) return;
+
+            const trySession = (payload: string): boolean => {
+              try {
+                sessionStorage.setItem(key, payload);
+                console.warn('[chat-store] persisted to sessionStorage fallback');
+                return true;
+              } catch {
+                return false;
+              }
+            };
+
+            // 2) If it failed, progressively trim heavy fields (attachments content, long texts, very old sessions)
+            try {
+              const data = JSON.parse(value);
+              const state = typeof data === 'object' && data !== null ? data : {};
+
+              const sessions = Array.isArray(state.state?.sessions) ? state.state.sessions : [];
+
+              const sanitizeMsg = (m: any) => {
+                const mm = { ...m };
+                if (mm.attachments && Array.isArray(mm.attachments)) {
+                  // Drop base64 content to avoid multi-MB payloads, keep metadata
+                  mm.attachments = mm.attachments.map((a: any) => ({ id: a.id, name: a.name, type: a.type, mime: a.mime, size: a.size }));
+                }
+                // Truncate extremely long assistant outputs
+                if (typeof mm.content === 'string' && mm.content.length > 12000) {
+                  mm.content = mm.content.slice(0, 12000) + '\n…';
+                }
+                return mm;
+              };
+
+              const trimSessions = (maxSessions: number, maxMsgs: number) => {
+                const copy = [...sessions]
+                  .sort((a: any, b: any) => (b?.updatedAt || 0) - (a?.updatedAt || 0))
+                  .slice(0, maxSessions)
+                  .map((s: any) => ({
+                    ...s,
+                    messages: Array.isArray(s.messages)
+                      ? s.messages.slice(-maxMsgs).map(sanitizeMsg)
+                      : [],
+                  }));
+                return copy;
+              };
+
+              // Try up to 3 levels of trimming
+              const levels = [
+                { maxSessions: 30, maxMsgs: 80 },
+                { maxSessions: 20, maxMsgs: 60 },
+                { maxSessions: 12, maxMsgs: 40 },
+              ];
+
+              for (const lv of levels) {
+                const compact = {
+                  ...state,
+                  state: {
+                    ...(state.state || {}),
+                    sessions: trimSessions(lv.maxSessions, lv.maxMsgs),
+                  },
+                };
+                const payload = JSON.stringify(compact);
+                if (trySet(payload) || trySession(payload)) return;
+              }
+
+              // Final attempt: persist only metadata (without any messages)
+              const metaOnly = {
+                ...state,
+                state: {
+                  ...(state.state || {}),
+                  sessions: (sessions as any[]).slice(-10).map((s: any) => ({ id: s.id, name: s.name, model: s.model, createdAt: s.createdAt, updatedAt: s.updatedAt, messages: [] })),
+                },
+              };
+              const metaPayload = JSON.stringify(metaOnly);
+              if (trySet(metaPayload) || trySession(metaPayload)) {
+                console.warn('[chat-store] Persisted metadata only (quota). Últimas sesiones sin mensajes.');
+              }
+            } catch (e) {
+              console.warn('[chat-store] persist failed (quota or private mode); continuing without persistence', e);
+            }
+          },
+          removeItem: (key: string) => {
+            try {
+              localStorage.removeItem(key);
+            } catch (e) {
+              console.warn('[chat-store] removeItem failed', e);
+            }
+          },
+        } as const;
+        return safeStorage;
+      }),
       partialize: (state) => ({
         sessions: state.sessions, // Persist all; user deletes manually
         openSessionIds: state.openSessionIds,
@@ -274,6 +404,7 @@ export const useChatStore = create<ChatState>()(
         recentModels: state.recentModels,
         agentMode: state.agentMode,
         adaptiveMode: state.adaptiveMode,
+        unlimitedAgent: state.unlimitedAgent,
       }),
     },
   ),

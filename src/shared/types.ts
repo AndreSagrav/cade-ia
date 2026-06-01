@@ -26,6 +26,7 @@ export interface ChatMessage {
   tokens?: { input: number; output: number };
   attachments?: Attachment[];
   agentChanges?: { path: string; oldContent: string; newContent: string }[];
+  toolCalls?: ToolCall[];
 }
 
 export interface Attachment {
@@ -157,4 +158,12 @@ export interface AgentRequest {
   system: string;
   projectRoot: string;
   maxIterations?: number;
+}
+
+export interface Mention {
+  id: string;
+  type: 'file' | 'folder' | 'selection';
+  path: string;       // path relativo al proyecto
+  label: string;      // nombre corto para display
+  content?: string;   // contenido resuelto (se llena al enviar)
 }
