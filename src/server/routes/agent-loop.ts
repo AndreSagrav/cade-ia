@@ -5,6 +5,7 @@ import { join, resolve, dirname } from 'path';
 import { config } from '../config';
 import type { AIProvider } from '@shared/types';
 import { getModelsByProvider, AI_MODELS } from '@shared/models';
+import { parseToolCalls, looksLikeToolIntent } from '../lib/tool-parser';
 
 export const agentRouter = Router();
 
@@ -127,6 +128,23 @@ const TOOL_DEFS = [
     },
   },
 ];
+
+// Reminder injected when a model clearly tried to call a tool but emitted an
+// unparseable format. Lets the agent self-correct instead of ending the turn.
+const TOOL_FORMAT_REMINDER = `[SISTEMA - FORMATO DE HERRAMIENTAS]: No pude interpretar tu última acción. Si querías usar una herramienta, vuelve a emitirla EXACTAMENTE en uno de estos formatos (sin texto adicional dentro de la etiqueta):
+- <read_file path="ruta/archivo.ext" />
+- <write_file path="ruta/archivo.ext">CONTENIDO COMPLETO</write_file>
+- <list_files path="carpeta" />
+- <search_files query="texto" />
+- <run_command command="npm install" />
+También se acepta JSON: {"tool":"write_file","args":{"path":"...","content":"..."}}. Si ya terminaste, responde al usuario con un resumen SIN usar herramientas.`;
+
+// finish_reason values that mean "output was cut off by the token limit".
+function isTruncatedFinish(reason?: string): boolean {
+  if (!reason) return false;
+  const r = reason.toLowerCase();
+  return r === 'length' || r === 'max_tokens' || r === 'model_length' || r === 'max_output_tokens';
+}
 
 function maskKey(key: string | undefined | null): string {
   if (!key) return 'none';
@@ -446,7 +464,7 @@ interface ProviderAdapter {
   buildBody(model: string, messages: any[], system: string): object;
   getEndpoint(model?: string): string;
   getHeaders(apiKey: string): Record<string, string>;
-  parseResponse(json: any): { text?: string; toolCalls?: { id: string; name: string; args: Record<string, unknown> }[] };
+  parseResponse(json: any): { text?: string; toolCalls?: { id: string; name: string; args: Record<string, unknown> }[]; finishReason?: string };
   buildToolResult(toolCallId: string, toolName: string, result: string): any;
 }
 
@@ -528,9 +546,11 @@ function openaiAdapter(endpoint: string, extra?: Record<string, string>, options
     getHeaders(apiKey) { return { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}`, ...extra }; },
     parseResponse(json) {
       const msg = json.choices?.[0]?.message;
-      if (!msg) return {};
+      const finishReason = json.choices?.[0]?.finish_reason;
+      if (!msg) return { finishReason };
       if (msg.tool_calls && msg.tool_calls.length > 0) {
         return {
+          finishReason,
           text: msg.content || undefined,
           toolCalls: msg.tool_calls.map((tc: any) => {
             let parsedArgs = {};
@@ -548,7 +568,7 @@ function openaiAdapter(endpoint: string, extra?: Record<string, string>, options
           }),
         };
       }
-      return { text: msg.content || '' };
+      return { finishReason, text: msg.content || '' };
     },
     buildToolResult(toolCallId, _toolName, result) {
       return { role: 'tool', tool_call_id: toolCallId, content: result };
@@ -588,14 +608,16 @@ const claudeAdapter: ProviderAdapter = {
     return { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' };
   },
   parseResponse(json) {
+    const finishReason = json.stop_reason;
     const content = json.content;
-    if (!content || !Array.isArray(content)) return {};
+    if (!content || !Array.isArray(content)) return { finishReason };
 
     const text = content.filter((b: any) => b.type === 'text').map((b: any) => b.text).join('');
     const toolUses = content.filter((b: any) => b.type === 'tool_use');
 
     if (toolUses.length > 0) {
       return {
+        finishReason,
         text: text || undefined,
         toolCalls: toolUses.map((tc: any) => ({
           id: tc.id,
@@ -604,7 +626,7 @@ const claudeAdapter: ProviderAdapter = {
         })),
       };
     }
-    return { text };
+    return { finishReason, text };
   },
   buildToolResult(toolCallId, _toolName, result) {
     return { role: 'user', content: [{ type: 'tool_result', tool_use_id: toolCallId, content: result }] };
@@ -638,14 +660,16 @@ const geminiAdapter: ProviderAdapter = {
   getEndpoint(model) { return `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`; },
   getHeaders(apiKey) { return { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey }; },
   parseResponse(json) {
+    const finishReason = json.candidates?.[0]?.finishReason;
     const parts = json.candidates?.[0]?.content?.parts;
-    if (!parts) return {};
+    if (!parts) return { finishReason };
 
     const textParts = parts.filter((p: any) => p.text);
     const functionCalls = parts.filter((p: any) => p.functionCall);
 
     if (functionCalls.length > 0) {
       return {
+        finishReason,
         text: textParts.map((p: any) => p.text).join('') || undefined,
         toolCalls: functionCalls.map((p: any, i: number) => ({
           id: `gemini-${Date.now()}-${i}`,
@@ -654,7 +678,7 @@ const geminiAdapter: ProviderAdapter = {
         })),
       };
     }
-    return { text: textParts.map((p: any) => p.text).join('') };
+    return { finishReason, text: textParts.map((p: any) => p.text).join('') };
   },
   buildToolResult(_toolCallId, toolName, result) {
     return {
@@ -774,6 +798,27 @@ async function fetchWithRetry(
         continue;
       }
 
+      // Retry transient server errors (500/502/503/504/408) instead of killing
+      // the whole agent run on a momentary provider hiccup. Only 429 was retried
+      // before, so any 5xx would leave the user stranded mid-task.
+      if ((response.status >= 500 || response.status === 408) && attempt < maxAttempts) {
+        const errText = await response.clone().text().catch(() => '');
+        const errMsg = errText || response.statusText || `Server error ${response.status}`;
+        if (onRetry) onRetry(attempt, delay, `(${response.status}) ${errMsg.slice(0, 120)}`);
+
+        const interval = 2000;
+        let remaining = delay;
+        while (remaining > 0) {
+          const chunk = Math.min(interval, remaining);
+          await new Promise((resolve) => setTimeout(resolve, chunk));
+          remaining -= chunk;
+          if (remaining > 0 && onHeartbeat) onHeartbeat();
+        }
+
+        delay = Math.min(Math.max(delay * 1.6, 800), capDelay);
+        continue;
+      }
+
       return response;
     } catch (err: any) {
       clearTimeout(timeoutId);
@@ -875,7 +920,7 @@ agentRouter.post('/', async (req: Request, res: Response) => {
   const modelDef = Object.values(AI_MODELS).find(m => m.apiModelId === currentModel || m.id === currentModel);
   const allowImages = !!modelDef?.capabilities?.includes('vision');
 
-  let convMessages = [...messages].map(m => {
+  const convMessages = [...messages].map(m => {
     if (m.attachments && m.attachments.length > 0 && !allowImages) {
       const images = m.attachments.filter((a: any) => a.type === 'image');
       if (images.length > 0) {
@@ -892,9 +937,11 @@ agentRouter.post('/', async (req: Request, res: Response) => {
   });
 
   let iteration = 0;
-  const iterationCap = Math.min(Math.max(maxIterations || 1, 1), 35);
+  const iterationCap = Math.min(Math.max(maxIterations || 1, 1), 50);
   const toolHistory: string[] = [];
   const triedModels = new Set<string>([currentModel]);
+  let continuationCount = 0; // auto-continues after token-limit truncation
+  let formatNudgeCount = 0; // nudges after unparseable tool-call attempts
 
   try {
     while (iteration < iterationCap) {
@@ -1030,75 +1077,16 @@ agentRouter.post('/', async (req: Request, res: Response) => {
       const json = await response.json();
       const parsed = adapter.parseResponse(json);
 
-      // Fallback: If no native tool calls were returned, check if the response contains XML tool call tags!
+      // Fallback: many models (NVIDIA, OpenRouter, Gemini-as-text, small OSS)
+      // emit tool calls as free text (XML-ish OR JSON) instead of native function
+      // calls. The tolerant universal parser handles quote/attr/format variants,
+      // markdown fences, name/arg aliases and truncated tags so we don't "finish"
+      // mid-task and leave the user stranded.
       if ((!parsed.toolCalls || parsed.toolCalls.length === 0) && parsed.text) {
-        const xmlToolCalls: any[] = [];
-        
-        // 1. read_file: <read_file path="..." /> or <read_file path="..."></read_file>
-        const readFileRegex = /<read_file\s+path=["']([^"']+)["']\s*(?:\/>|>\s*<\/read_file>)/gi;
-        let match;
-        while ((match = readFileRegex.exec(parsed.text)) !== null) {
-          xmlToolCalls.push({
-            id: `xml-read-${Date.now()}-${xmlToolCalls.length}`,
-            name: 'read_file',
-            args: { path: match[1] }
-          });
-        }
-
-        // 2. write_file: <write_file path="..." >content</write_file>
-        const writeFileRegex = /<write_file\s+path=["']([^"']+)["']\s*>([\s\S]*?)<\/write_file>/gi;
-        while ((match = writeFileRegex.exec(parsed.text)) !== null) {
-          xmlToolCalls.push({
-            id: `xml-write-${Date.now()}-${xmlToolCalls.length}`,
-            name: 'write_file',
-            args: { path: match[1], content: match[2] }
-          });
-        }
-
-        // 2b. Check for unclosed write_file tag due to token/timeout truncation
-        const unclosedWriteRegex = /<write_file\s+path=["']([^"']+)["']\s*>([\s\S]*)$/i;
-        const unclosedMatch = unclosedWriteRegex.exec(parsed.text);
-        if (unclosedMatch && !parsed.text.includes('</write_file>')) {
-          xmlToolCalls.push({
-            id: `xml-write-unclosed-${Date.now()}`,
-            name: 'write_file',
-            args: { path: unclosedMatch[1], content: unclosedMatch[2], _unclosed: true }
-          });
-        }
-
-        // 3. list_files: <list_files path="..." />
-        const listFilesRegex = /<list_files\s+path=["']([^"']+)["']\s*(?:\/>|>\s*<\/list_files>)/gi;
-        while ((match = listFilesRegex.exec(parsed.text)) !== null) {
-          xmlToolCalls.push({
-            id: `xml-list-${Date.now()}-${xmlToolCalls.length}`,
-            name: 'list_files',
-            args: { path: match[1] }
-          });
-        }
-
-        // 4. search_files: <search_files query="..." />
-        const searchFilesRegex = /<search_files\s+query=["']([^"']+)["']\s*(?:\/>|>\s*<\/search_files>)/gi;
-        while ((match = searchFilesRegex.exec(parsed.text)) !== null) {
-          xmlToolCalls.push({
-            id: `xml-search-${Date.now()}-${xmlToolCalls.length}`,
-            name: 'search_files',
-            args: { query: match[1] }
-          });
-        }
-
-        // 5. run_command: <run_command command="..." />
-        const runCommandRegex = /<run_command\s+command=["']([^"']+)["']\s*(?:\/>|>\s*<\/run_command>)/gi;
-        while ((match = runCommandRegex.exec(parsed.text)) !== null) {
-          xmlToolCalls.push({
-            id: `xml-run-${Date.now()}-${xmlToolCalls.length}`,
-            name: 'run_command',
-            args: { command: match[1] }
-          });
-        }
-
-        if (xmlToolCalls.length > 0) {
-          parsed.toolCalls = xmlToolCalls;
-          console.log(`[CodeAI] Interceptó ${xmlToolCalls.length} llamadas de herramientas en formato XML en el texto.`);
+        const textCalls = parseToolCalls(parsed.text);
+        if (textCalls.length > 0) {
+          parsed.toolCalls = textCalls;
+          console.log(`[CodeAI] Parser universal interceptó ${textCalls.length} llamada(s) de herramienta en el texto.`);
         }
       }
 
@@ -1123,30 +1111,44 @@ agentRouter.post('/', async (req: Request, res: Response) => {
 
         // Execute each tool call
         let loopDetected = false;
+        let loopNudge = false;
         for (const tc of parsed.toolCalls) {
           const toolSignature = `${tc.name}:${JSON.stringify(tc.args)}`;
           toolHistory.push(toolSignature);
-          
-          // Pre-detect loops (2 identical calls in a row) to inject a warning and help the model break the cycle
-          if (toolHistory.length >= 2) {
-            const last2 = toolHistory.slice(-2);
-            if (last2[0] === last2[1]) {
-              sendEvent('status', { type: 'note', message: `⚠️ Repetición detectada en "${tc.name}". Inyectando alerta de autocorrección...` });
-              convMessages.push({
-                role: 'user',
-                content: `[SISTEMA - ADVERTENCIA DE AUTOCORRECCIÓN]: Has ejecutado la herramienta "${tc.name}" con los mismos argumentos de manera consecutiva. Si la acción ya se realizó (por ejemplo, el archivo ya se guardó con éxito), NO la repitas de nuevo. Procede con el siguiente paso de tu plan, refactoriza o reporta el resultado al usuario para concluir.`
-              } as any);
-            }
+
+          // How many times this exact call repeats consecutively at the tail.
+          let repeatCount = 1;
+          for (let h = toolHistory.length - 2; h >= 0; h--) {
+            if (toolHistory[h] === toolSignature) repeatCount++;
+            else break;
           }
 
-          // Detect infinite loops (3 identical calls in a row)
-          if (toolHistory.length >= 3) {
-            const last3 = toolHistory.slice(-3);
-            if (last3[0] === last3[1] && last3[1] === last3[2]) {
-              loopDetected = true;
-              sendEvent('error', { message: `Loop infinito detectado. El modelo está repitiendo la misma herramienta: ${tc.name}` });
-              break;
-            }
+          // 2nd identical call → gentle autocorrection nudge (still executes).
+          if (repeatCount === 2) {
+            sendEvent('status', { type: 'note', message: `⚠️ Repetición detectada en "${tc.name}". Inyectando alerta de autocorrección...` });
+            convMessages.push({
+              role: 'user',
+              content: `[SISTEMA - ADVERTENCIA DE AUTOCORRECCIÓN]: Has ejecutado la herramienta "${tc.name}" con los mismos argumentos de manera consecutiva. Si la acción ya se realizó (por ejemplo, el archivo ya se guardó con éxito), NO la repitas de nuevo. Procede con el siguiente paso de tu plan, refactoriza o reporta el resultado al usuario para concluir.`
+            } as any);
+          }
+
+          // 3rd–4th identical call → don't pay to re-run it; re-prompt with a
+          // strong directive to advance instead of killing the task.
+          if (repeatCount >= 3 && repeatCount < 5) {
+            sendEvent('status', { type: 'note', message: `↪️ Repetición x${repeatCount} en "${tc.name}". Omitiendo y forzando el siguiente paso...` });
+            convMessages.push({
+              role: 'user',
+              content: `[SISTEMA - CORRECCIÓN]: Pediste "${tc.name}" con los mismos argumentos ${repeatCount} veces seguidas. Esa acción YA está hecha y su resultado no cambiará. NO la vuelvas a invocar. Avanza al siguiente paso concreto del plan; si la tarea ya está completa, responde al usuario con un resumen final SIN llamar herramientas.`
+            } as any);
+            loopNudge = true;
+            break;
+          }
+
+          // 5+ identical calls → genuine infinite loop; stop to avoid burning tokens.
+          if (repeatCount >= 5) {
+            loopDetected = true;
+            sendEvent('status', { type: 'note', message: `Bucle detectado en "${tc.name}" (x${repeatCount}). Deteniendo para no gastar tokens.` });
+            break;
           }
 
           sendEvent('tool_call', {
@@ -1167,11 +1169,14 @@ agentRouter.post('/', async (req: Request, res: Response) => {
             sendEvent('file_change', fileChange);
           }
 
-          // Add tool result to conversation
-          const isXml = tc.id.startsWith('xml-');
+          // Add tool result to conversation. Calls recovered from free text
+          // (ids prefixed "text-") must be fed back as a user message — pushing a
+          // tool/function role without a matching native tool_call would make the
+          // provider API reject the request.
+          const isXml = tc.id.startsWith('text-');
           if (isXml) {
             let contentMsg = `[SISTEMA - RESULTADO DE HERRAMIENTA]:\nLa herramienta "${tc.name}" fue ejecutada con éxito.\nResultado:\n${result}`;
-            if (tc.args && tc.args._unclosed) {
+            if ((tc as any)._unclosed) {
               contentMsg += `\n\n⚠️ [ALERTA DE TRUNCADO DE TOKENS]: Tu respuesta anterior se interrumpió abruptamente debido al límite de tokens del proveedor de IA o tiempo de espera mientras escribías el archivo "${tc.args.path}". He guardado el contenido parcial con éxito para evitar perder tu trabajo. Por favor, CONTINÚA escribiendo el código restante para "${tc.args.path}" exactamente desde la línea donde te quedaste (reanudando la sintaxis rota) y asegúrate de cerrar la etiqueta </write_file> cuando termines el archivo.`;
             }
             // Push as a user message to avoid API schema errors on tool role
@@ -1185,13 +1190,47 @@ agentRouter.post('/', async (req: Request, res: Response) => {
           }
         }
         
-        if (loopDetected) break;
+        if (loopDetected) {
+          sendEvent('content', { text: `\n\n⚠️ Me detuve para evitar un bucle infinito. Dime cómo prefieres continuar.` });
+          break;
+        }
+
+        // Forced-advance nudge (3rd/4th repeat): re-prompt without executing dup.
+        if (loopNudge) continue;
 
         // Continue the loop — the AI will see the tool results
         continue;
       }
 
-      // No tool calls — final text response
+      // ── No tool calls this turn ──────────────────────────────────────────
+      const truncated = isTruncatedFinish(parsed.finishReason);
+
+      // (a) The model clearly tried to call a tool but the format was unparseable
+      //     → nudge with the exact format and retry instead of ending the turn.
+      if (!truncated && parsed.text && looksLikeToolIntent(parsed.text) && formatNudgeCount < 2) {
+        formatNudgeCount++;
+        sendEvent('status', { type: 'note', message: 'No pude interpretar la herramienta; pidiendo el formato correcto...' });
+        if (provider === 'claude') convMessages.push({ role: 'assistant', content: json.content });
+        else if (provider === 'gemini') convMessages.push({ role: 'model', parts: json.candidates?.[0]?.content?.parts ?? [{ text: parsed.text }] });
+        else convMessages.push(json.choices?.[0]?.message ?? { role: 'assistant', content: parsed.text });
+        convMessages.push({ role: 'user', content: TOOL_FORMAT_REMINDER } as any);
+        continue;
+      }
+
+      // (b) Response was cut off by the token limit → auto-continue from where it
+      //     stopped (bounded) so long files/answers aren't left half-written.
+      if (truncated && continuationCount < 4) {
+        continuationCount++;
+        if (parsed.text) sendEvent('content', { text: parsed.text });
+        sendEvent('status', { type: 'note', message: `La respuesta se cortó por límite de tokens. Continuando (${continuationCount}/4)...` });
+        if (provider === 'claude') convMessages.push({ role: 'assistant', content: json.content });
+        else if (provider === 'gemini') convMessages.push({ role: 'model', parts: json.candidates?.[0]?.content?.parts ?? [{ text: parsed.text || '' }] });
+        else convMessages.push(json.choices?.[0]?.message ?? { role: 'assistant', content: parsed.text || '' });
+        convMessages.push({ role: 'user', content: '[SISTEMA]: Tu respuesta anterior se cortó por el límite de tokens. Continúa EXACTAMENTE desde donde te quedaste, sin repetir lo ya escrito.' } as any);
+        continue;
+      }
+
+      // (c) Genuine final answer.
       if (parsed.text) {
         sendEvent('content', { text: parsed.text });
       }
@@ -1199,7 +1238,7 @@ agentRouter.post('/', async (req: Request, res: Response) => {
     }
 
     if (iteration >= iterationCap) {
-      sendEvent('content', { text: `\n\n⚠️ Se alcanzó el límite de iteraciones del agente (${iterationCap}).` });
+      sendEvent('content', { text: `\n\n⚠️ Se alcanzó el límite de iteraciones del agente (${iterationCap}). Si la tarea quedó incompleta, escríbeme "continúa" y sigo desde aquí.` });
     }
   } catch (e: any) {
     sendEvent('error', { message: `Agent error: ${e.message}` });

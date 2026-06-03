@@ -564,7 +564,7 @@ async function streamAgentChat(mentionedContext?: string): Promise<void> {
   const activeGithubAccount = settingsState.activeGithubAccount;
   const activeAccount = githubAccounts.find((a: any) => a.username === activeGithubAccount) || githubAccounts[0];
 
-  const conservativeIters = model.provider === 'gemini' ? 6 : 15;
+  const conservativeIters = model.provider === 'gemini' ? 12 : 25;
   const body = {
     messages: historyMessages,
     model: apiModelId,
