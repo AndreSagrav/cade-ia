@@ -6,6 +6,7 @@ import { config } from '../config';
 import type { AIProvider } from '@shared/types';
 import { getModelsByProvider, AI_MODELS } from '@shared/models';
 import { parseToolCalls, looksLikeToolIntent } from '../lib/tool-parser';
+import { StreamReconstructor, dialectForProvider } from '../lib/stream-parser';
 
 export const agentRouter = Router();
 
@@ -975,16 +976,28 @@ agentRouter.post('/', async (req: Request, res: Response) => {
         await new Promise((resolve) => setTimeout(resolve, gap));
       }
 
-      // Call the AI provider (non-streaming to get full response with tool calls)
-      const body = adapter.buildBody(currentModel, convMessages, system || '');
+      // Call the AI provider. FASE 2.1: request a token-by-token stream so the
+      // UI feels fluid; we still reconstruct the full response (text + tool
+      // calls) so FASE 1 parsing/robustness is unchanged. Any streaming hiccup
+      // falls back to a clean non-streaming request.
+      const baseBody = adapter.buildBody(currentModel, convMessages, system || '');
       const endpoint = adapter.getEndpoint(currentModel);
       const headers = adapter.getHeaders(apiKey);
-
-      // For Gemini, add apiKey as query param
-      const url = provider === 'gemini' ? `${endpoint}?key=${apiKey}` : endpoint;
       const fetchHeaders = provider === 'gemini'
         ? { 'Content-Type': 'application/json' }
         : headers;
+
+      // Non-streaming URL/body (also used as the fallback).
+      const nonStreamUrl = provider === 'gemini' ? `${endpoint}?key=${apiKey}` : endpoint;
+
+      // Streaming URL/body.
+      let url = nonStreamUrl;
+      let reqBody: any = baseBody;
+      if (provider === 'gemini') {
+        url = `${endpoint.replace(':generateContent', ':streamGenerateContent')}?alt=sse&key=${apiKey}`;
+      } else {
+        reqBody = { ...baseBody, stream: true };
+      }
 
       sendEvent('status', { type: 'thinking', iteration });
 
@@ -993,7 +1006,7 @@ agentRouter.post('/', async (req: Request, res: Response) => {
         {
           method: 'POST',
           headers: fetchHeaders,
-          body: JSON.stringify(body),
+          body: JSON.stringify(reqBody),
         },
         (attempt, delayMs, errMsg) => {
           sendEvent('status', {
@@ -1074,7 +1087,64 @@ agentRouter.post('/', async (req: Request, res: Response) => {
         break;
       }
 
-      const json = await response.json();
+      // Consume the response: stream it (emitting deltas) when the provider
+      // actually returned an SSE stream; otherwise parse JSON normally. If a
+      // provider ignored `stream:true` and replied with JSON, content-type will
+      // not be event-stream and we use the plain JSON path (no regression).
+      const ctype = response.headers.get('content-type') || '';
+      const isEventStream = ctype.includes('event-stream');
+      let json: any;
+      let streamedThisTurn = false;
+
+      if (isEventStream && response.body) {
+        const recon = new StreamReconstructor(dialectForProvider(provider));
+        let sawText = false;
+        try {
+          const reader = (response.body as any).getReader();
+          const decoder = new TextDecoder();
+          // eslint-disable-next-line no-constant-condition
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            const delta = recon.push(decoder.decode(value, { stream: true }));
+            if (delta) {
+              sawText = true;
+              sendEvent('content', { text: delta });
+            }
+            if (clientAborted) {
+              try { await reader.cancel(); } catch { /* ignore */ }
+              break;
+            }
+          }
+          json = recon.finish();
+          streamedThisTurn = sawText;
+        } catch (streamErr: any) {
+          console.error('[CodeAI] Streaming interrumpido:', streamErr?.message);
+          if (sawText) {
+            // Salvage what we already streamed (avoid double-emitting text).
+            json = recon.finish();
+            streamedThisTurn = true;
+          } else {
+            // Clean fallback to a non-streaming request.
+            const fb = await fetchWithRetry(
+              nonStreamUrl,
+              { method: 'POST', headers: fetchHeaders, body: JSON.stringify(baseBody) },
+              undefined,
+              () => sendEvent('status', { type: 'heartbeat' }),
+              fast ? { maxAttempts: 6, initialDelayMs: 600, capDelayMs: 6000 } : undefined
+            );
+            if (!fb.ok) {
+              const t = await fb.text().catch(() => '');
+              sendEvent('error', { message: `API error ${fb.status}: ${t.slice(0, 300)}` });
+              break;
+            }
+            json = await fb.json();
+          }
+        }
+      } else {
+        json = await response.json();
+      }
+
       const parsed = adapter.parseResponse(json);
 
       // Fallback: many models (NVIDIA, OpenRouter, Gemini-as-text, small OSS)
@@ -1092,8 +1162,8 @@ agentRouter.post('/', async (req: Request, res: Response) => {
 
       // If there are tool calls, execute them
       if (parsed.toolCalls && parsed.toolCalls.length > 0) {
-        // Send any partial text
-        if (parsed.text) {
+        // Send any partial text (unless it was already streamed live this turn)
+        if (parsed.text && !streamedThisTurn) {
           sendEvent('content', { text: parsed.text });
         }
 
@@ -1221,7 +1291,7 @@ agentRouter.post('/', async (req: Request, res: Response) => {
       //     stopped (bounded) so long files/answers aren't left half-written.
       if (truncated && continuationCount < 4) {
         continuationCount++;
-        if (parsed.text) sendEvent('content', { text: parsed.text });
+        if (parsed.text && !streamedThisTurn) sendEvent('content', { text: parsed.text });
         sendEvent('status', { type: 'note', message: `La respuesta se cortó por límite de tokens. Continuando (${continuationCount}/4)...` });
         if (provider === 'claude') convMessages.push({ role: 'assistant', content: json.content });
         else if (provider === 'gemini') convMessages.push({ role: 'model', parts: json.candidates?.[0]?.content?.parts ?? [{ text: parsed.text || '' }] });
@@ -1230,8 +1300,8 @@ agentRouter.post('/', async (req: Request, res: Response) => {
         continue;
       }
 
-      // (c) Genuine final answer.
-      if (parsed.text) {
+      // (c) Genuine final answer (skip if already streamed live this turn).
+      if (parsed.text && !streamedThisTurn) {
         sendEvent('content', { text: parsed.text });
       }
       break;
