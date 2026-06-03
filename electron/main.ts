@@ -70,14 +70,24 @@ app.whenReady().then(() => {
   startServer();
   createWindow();
 
-  // Setup auto-updater in production
+  // Setup auto-updater in production. Failures here (e.g. no published release,
+  // offline) must never crash the app, so we swallow both the emitted 'error'
+  // event and the promise rejection.
   if (!isDev) {
-    autoUpdater.checkForUpdatesAndNotify();
+    autoUpdater.on('error', (err) => {
+      console.error('[AutoUpdater] error:', err?.message ?? err);
+    });
+
+    const checkForUpdates = () => {
+      autoUpdater.checkForUpdatesAndNotify().catch((err) => {
+        console.error('[AutoUpdater] check failed:', err?.message ?? err);
+      });
+    };
+
+    checkForUpdates();
 
     // Check for updates every 2 hours
-    setInterval(() => {
-      autoUpdater.checkForUpdatesAndNotify();
-    }, 1000 * 60 * 60 * 2);
+    setInterval(checkForUpdates, 1000 * 60 * 60 * 2);
   }
 
   app.on('activate', () => {
