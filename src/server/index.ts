@@ -5,8 +5,7 @@ import rateLimit from 'express-rate-limit';
 import { WebSocketServer } from 'ws';
 import { createServer } from 'http';
 import { readFileSync } from 'fs';
-import { join, dirname } from 'path';
-import { fileURLToPath } from 'url';
+import { join } from 'path';
 import { config } from './config';
 import { filesRouter } from './routes/files';
 import { aiRouter } from './routes/ai';
@@ -15,9 +14,6 @@ import { gitRouter } from './routes/git';
 import { githubRouter } from './routes/github';
 import { authRouter } from './routes/auth';
 import { agentRouter } from './routes/agent-loop';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
 
 function getAppVersion(): string {
   try {

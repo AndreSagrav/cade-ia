@@ -12,7 +12,7 @@
     "dev:client": "vite",
     "dev:server": "tsx watch src/server/index.ts",
     "build": "tsc -b && vite build",
-    "build:server": "tsc -p tsconfig.server.json",
+    "build:server": "tsc -p tsconfig.server.json && node -e \"fs.mkdirSync('dist-server', {recursive: true}); fs.writeFileSync('dist-server/package.json', '{\\\"type\\\":\\\"commonjs\\\"}')\"",
     "build:electron": "tsc -p tsconfig.electron.json",
     "preview": "vite preview",
     "lint": "eslint src/ --ext .ts,.tsx --fix",
