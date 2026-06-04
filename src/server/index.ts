@@ -4,6 +4,9 @@ import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 import { WebSocketServer } from 'ws';
 import { createServer } from 'http';
+import { readFileSync } from 'fs';
+import { join, dirname } from 'path';
+import { fileURLToPath } from 'url';
 import { config } from './config';
 import { filesRouter } from './routes/files';
 import { aiRouter } from './routes/ai';
@@ -12,6 +15,19 @@ import { gitRouter } from './routes/git';
 import { githubRouter } from './routes/github';
 import { authRouter } from './routes/auth';
 import { agentRouter } from './routes/agent-loop';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+
+function getAppVersion(): string {
+  try {
+    const pkgPath = join(__dirname, '..', '..', 'package.json');
+    const pkg = JSON.parse(readFileSync(pkgPath, 'utf-8'));
+    return pkg.version || '2.0.0';
+  } catch {
+    return '2.0.0';
+  }
+}
 
 const app = express();
 app.set('trust proxy', 1);
@@ -46,7 +62,7 @@ app.use('/api/ai/agent', agentRouter);
 
 // Health check
 app.get('/api/health', (_req, res) => {
-  res.json({ ok: true, version: '2.0.0', uptime: process.uptime() });
+  res.json({ ok: true, version: getAppVersion(), uptime: process.uptime() });
 });
 
 // WebSocket server for terminal streaming and hot-reload

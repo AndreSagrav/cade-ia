@@ -14,6 +14,17 @@ type Tab = 'keys' | 'appearance' | 'editor';
 
 export function SettingsModal({ open, onClose }: SettingsModalProps) {
   const [tab, setTab] = useState<Tab>('keys');
+  const [version, setVersion] = useState<string>('');
+
+  useEffect(() => {
+    if (!open) return;
+    fetch(`${BASE_URL}/api/health`)
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.version) setVersion(data.version);
+      })
+      .catch(() => {});
+  }, [open]);
 
   if (!open) return null;
 
@@ -38,6 +49,12 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
           <TabBtn icon={Key} label="API Keys" active={tab === 'keys'} onClick={() => setTab('keys')} />
           <TabBtn icon={Palette} label="Apariencia" active={tab === 'appearance'} onClick={() => setTab('appearance')} />
           <TabBtn icon={Type} label="Editor" active={tab === 'editor'} onClick={() => setTab('editor')} />
+          
+          {version && (
+            <div className="mt-auto pt-4 text-[10px] text-[#585b70] text-center font-bold tracking-wide">
+              v{version}
+            </div>
+          )}
         </div>
 
         {/* Content */}
