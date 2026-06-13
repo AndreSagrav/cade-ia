@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { Send, Bot, Sparkles, Plus, X, History, MessageSquare, Trash2, Mic, GitBranch, Undo2, Loader2, VolumeX, Check, CloudUpload, Play, MoreVertical, Brain, ChevronDown, ChevronRight } from 'lucide-react';
 import { ModelSelector } from './ModelSelector';
 import { useChatStore } from '@/store/chat-store';
@@ -579,6 +579,96 @@ function ToolCallCard({ call }: { call: any }) {
   );
 }
 
+/* ── Diff block (side-by-side) ── */
+function computeLineDiff(oldText: string, newText: string): { oldLine: string | null; newLine: string | null; type: 'same' | 'add' | 'remove' }[] {
+  const oldLines = oldText.split('\n');
+  const newLines = newText.split('\n');
+  const result: { oldLine: string | null; newLine: string | null; type: 'same' | 'add' | 'remove' }[] = [];
+  let i = 0, j = 0;
+  while (i < oldLines.length || j < newLines.length) {
+    if (i >= oldLines.length) {
+      result.push({ oldLine: null, newLine: newLines[j], type: 'add' });
+      j++;
+    } else if (j >= newLines.length) {
+      result.push({ oldLine: oldLines[i], newLine: null, type: 'remove' });
+      i++;
+    } else if (oldLines[i] === newLines[j]) {
+      result.push({ oldLine: oldLines[i], newLine: newLines[j], type: 'same' });
+      i++; j++;
+    } else {
+      // Simple heuristic: check next few lines for alignment
+      const aheadOld = oldLines.slice(i + 1, i + 4).indexOf(newLines[j]);
+      const aheadNew = newLines.slice(j + 1, j + 4).indexOf(oldLines[i]);
+      if (aheadOld !== -1 && (aheadNew === -1 || aheadOld <= aheadNew)) {
+        result.push({ oldLine: oldLines[i], newLine: null, type: 'remove' });
+        i++;
+      } else if (aheadNew !== -1) {
+        result.push({ oldLine: null, newLine: newLines[j], type: 'add' });
+        j++;
+      } else {
+        result.push({ oldLine: oldLines[i], newLine: newLines[j], type: 'same' });
+        i++; j++;
+      }
+    }
+  }
+  return result;
+}
+
+function DiffBlock({ path, oldContent, newContent }: { path: string; oldContent: string; newContent: string }) {
+  const [open, setOpen] = useState(true);
+  const diff = computeLineDiff(oldContent || '', newContent || '');
+  return (
+    <div className="my-2 rounded-lg border overflow-hidden" style={{ borderColor: 'hsl(var(--border))' }}>
+      <button
+        onClick={() => setOpen(!open)}
+        className="flex w-full items-center gap-2 px-3 py-2 text-[11px] font-semibold transition-colors hover:bg-muted/20"
+        style={{ background: 'hsl(var(--muted) / 0.3)', borderBottom: open ? '1px solid hsl(var(--border) / 0.5)' : 'none' }}
+      >
+        <span className="text-[10px] font-mono px-1.5 py-0.5 rounded" style={{ background: '#1e1e2e', color: '#a6e3a1' }}>
+          {path.split('/').pop()}
+        </span>
+        <span className="text-muted-foreground font-mono text-[10px] truncate">{path}</span>
+        {open ? <ChevronDown size={12} className="ml-auto" /> : <ChevronRight size={12} className="ml-auto" />}
+      </button>
+      {open && (
+        <div className="grid grid-cols-2 text-[10px] font-mono" style={{ background: '#11111b' }}>
+          {/* Header */}
+          <div className="px-2 py-1 border-r border-b" style={{ borderColor: 'hsl(var(--border) / 0.3)', color: '#6c7086' }}>— old</div>
+          <div className="px-2 py-1 border-b" style={{ borderColor: 'hsl(var(--border) / 0.3)', color: '#6c7086' }}>++ new</div>
+          {/* Rows */}
+          {diff.map((row, idx) => (
+            <>
+              <div
+                key={`o-${idx}`}
+                className="px-2 py-0.5 border-r truncate"
+                style={{
+                  borderColor: 'hsl(var(--border) / 0.15)',
+                  background: row.type === 'remove' ? '#3c1e1e40' : row.type === 'same' ? 'transparent' : '#1e1e2e20',
+                  color: row.type === 'remove' ? '#f38ba8' : row.type === 'same' ? '#6c7086' : '#1e1e2e40',
+                }}
+                title={row.oldLine ?? ''}
+              >
+                {row.oldLine ?? ''}
+              </div>
+              <div
+                key={`n-${idx}`}
+                className="px-2 py-0.5 truncate"
+                style={{
+                  background: row.type === 'add' ? '#1e3c1e40' : row.type === 'same' ? 'transparent' : '#1e1e2e20',
+                  color: row.type === 'add' ? '#a6e3a1' : row.type === 'same' ? '#6c7086' : '#1e1e2e40',
+                }}
+                title={row.newLine ?? ''}
+              >
+                {row.newLine ?? ''}
+              </div>
+            </>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ── Terminal block inline ── */
 function TerminalBlock({ content }: { content: string }) {
   return (
@@ -748,7 +838,7 @@ function MessageBubble({ message, isLast }: { message: any; isLast: boolean }) {
             ))}
           </div>
         )}
-        {!silentMode && hasActions && !message.toolCalls && (
+        {!silentMode && hasActions && !message.toolCalls && !message.agentChanges && (
           <div
             className="mt-2 rounded-lg border px-3 py-2 text-[12px]"
             style={{
@@ -771,6 +861,18 @@ function MessageBubble({ message, isLast }: { message: any; isLast: boolean }) {
             <div className="mt-1 text-[10px] opacity-70">
               Revisalos en el editor y aceptá/rechazá cada uno.
             </div>
+          </div>
+        )}
+        {message.agentChanges && message.agentChanges.length > 0 && (
+          <div className="mt-1">
+            {message.agentChanges.map((change: any, i: number) => (
+              <DiffBlock
+                key={i}
+                path={change.path}
+                oldContent={change.oldContent}
+                newContent={change.newContent}
+              />
+            ))}
           </div>
         )}
       </div>

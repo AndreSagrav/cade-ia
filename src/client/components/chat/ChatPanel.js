@@ -1,4 +1,4 @@
-import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
+import { jsx as _jsx, jsxs as _jsxs, Fragment as _Fragment } from "react/jsx-runtime";
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { Send, Bot, Sparkles, Plus, X, History, MessageSquare, Trash2, Mic, GitBranch, Undo2, Loader2, VolumeX, Check, CloudUpload, Play, MoreVertical, Brain, ChevronDown, ChevronRight } from 'lucide-react';
 import { ModelSelector } from './ModelSelector';
@@ -196,6 +196,59 @@ function ToolCallCard({ call }) {
                             color: isDone ? meta.color : 'hsl(var(--warning))',
                         }, children: isDone ? '✓' : '⋯' })] }), args && (_jsx("div", { className: "px-3 pb-2", children: _jsx("code", { className: "block rounded bg-muted/40 px-2 py-1 text-[10px] font-mono text-muted-foreground truncate", children: args }) })), isDone && call.result && (_jsx("div", { className: "border-t px-3 py-2 text-[11px] text-muted-foreground", style: { borderColor: 'hsl(var(--border) / 0.5)' }, children: _jsx("pre", { className: "whitespace-pre-wrap break-words font-mono text-[10px]", style: { maxHeight: '120px', overflow: 'auto' }, children: typeof call.result === 'string' ? call.result.slice(0, 300) : JSON.stringify(call.result, null, 2).slice(0, 300) }) }))] }));
 }
+/* ── Diff block (side-by-side) ── */
+function computeLineDiff(oldText, newText) {
+    const oldLines = oldText.split('\n');
+    const newLines = newText.split('\n');
+    const result = [];
+    let i = 0, j = 0;
+    while (i < oldLines.length || j < newLines.length) {
+        if (i >= oldLines.length) {
+            result.push({ oldLine: null, newLine: newLines[j], type: 'add' });
+            j++;
+        }
+        else if (j >= newLines.length) {
+            result.push({ oldLine: oldLines[i], newLine: null, type: 'remove' });
+            i++;
+        }
+        else if (oldLines[i] === newLines[j]) {
+            result.push({ oldLine: oldLines[i], newLine: newLines[j], type: 'same' });
+            i++;
+            j++;
+        }
+        else {
+            // Simple heuristic: check next few lines for alignment
+            const aheadOld = oldLines.slice(i + 1, i + 4).indexOf(newLines[j]);
+            const aheadNew = newLines.slice(j + 1, j + 4).indexOf(oldLines[i]);
+            if (aheadOld !== -1 && (aheadNew === -1 || aheadOld <= aheadNew)) {
+                result.push({ oldLine: oldLines[i], newLine: null, type: 'remove' });
+                i++;
+            }
+            else if (aheadNew !== -1) {
+                result.push({ oldLine: null, newLine: newLines[j], type: 'add' });
+                j++;
+            }
+            else {
+                result.push({ oldLine: oldLines[i], newLine: newLines[j], type: 'same' });
+                i++;
+                j++;
+            }
+        }
+    }
+    return result;
+}
+function DiffBlock({ path, oldContent, newContent }) {
+    const [open, setOpen] = useState(true);
+    const diff = computeLineDiff(oldContent || '', newContent || '');
+    return (_jsxs("div", { className: "my-2 rounded-lg border overflow-hidden", style: { borderColor: 'hsl(var(--border))' }, children: [_jsxs("button", { onClick: () => setOpen(!open), className: "flex w-full items-center gap-2 px-3 py-2 text-[11px] font-semibold transition-colors hover:bg-muted/20", style: { background: 'hsl(var(--muted) / 0.3)', borderBottom: open ? '1px solid hsl(var(--border) / 0.5)' : 'none' }, children: [_jsx("span", { className: "text-[10px] font-mono px-1.5 py-0.5 rounded", style: { background: '#1e1e2e', color: '#a6e3a1' }, children: path.split('/').pop() }), _jsx("span", { className: "text-muted-foreground font-mono text-[10px] truncate", children: path }), open ? _jsx(ChevronDown, { size: 12, className: "ml-auto" }) : _jsx(ChevronRight, { size: 12, className: "ml-auto" })] }), open && (_jsxs("div", { className: "grid grid-cols-2 text-[10px] font-mono", style: { background: '#11111b' }, children: [_jsx("div", { className: "px-2 py-1 border-r border-b", style: { borderColor: 'hsl(var(--border) / 0.3)', color: '#6c7086' }, children: "\u2014 old" }), _jsx("div", { className: "px-2 py-1 border-b", style: { borderColor: 'hsl(var(--border) / 0.3)', color: '#6c7086' }, children: "++ new" }), diff.map((row, idx) => (_jsxs(_Fragment, { children: [_jsx("div", { className: "px-2 py-0.5 border-r truncate", style: {
+                                    borderColor: 'hsl(var(--border) / 0.15)',
+                                    background: row.type === 'remove' ? '#3c1e1e40' : row.type === 'same' ? 'transparent' : '#1e1e2e20',
+                                    color: row.type === 'remove' ? '#f38ba8' : row.type === 'same' ? '#6c7086' : '#1e1e2e40',
+                                }, title: row.oldLine ?? '', children: row.oldLine ?? '' }, `o-${idx}`), _jsx("div", { className: "px-2 py-0.5 truncate", style: {
+                                    background: row.type === 'add' ? '#1e3c1e40' : row.type === 'same' ? 'transparent' : '#1e1e2e20',
+                                    color: row.type === 'add' ? '#a6e3a1' : row.type === 'same' ? '#6c7086' : '#1e1e2e40',
+                                }, title: row.newLine ?? '', children: row.newLine ?? '' }, `n-${idx}`)] })))] }))] }));
+}
 /* ── Terminal block inline ── */
 function TerminalBlock({ content }) {
     return (_jsxs("div", { className: "my-2 rounded-lg border overflow-hidden font-mono text-[11px] leading-relaxed", style: {
@@ -260,9 +313,9 @@ function MessageBubble({ message, isLast }) {
     const { prose, fileCount, runCount, files } = parseAgentMessage(rawProse);
     const { silentMode } = useChatStore();
     const hasActions = fileCount + runCount > 0;
-    return (_jsxs("div", { className: cn('flex gap-3', isLast && 'animate-fade-in'), children: [_jsx(AvatarAI, {}), _jsxs("div", { className: "flex-1 min-w-0 pt-0.5", children: [_jsx("div", { className: "text-[11px] font-semibold mb-2", style: { color: 'hsl(var(--muted-foreground))' }, children: AI_MODELS[message.model ?? '']?.label ?? 'IA' }), thinkings.length > 0 && (_jsx("div", { className: "space-y-1", children: thinkings.map((t) => (_jsx(ThinkingBlock, { content: t.content }, t.id))) })), prose && (_jsx("div", { style: { color: 'hsl(var(--foreground))' }, children: parseContentSegments(prose).map((seg, i) => seg.type === 'terminal' ? (_jsx(TerminalBlock, { content: seg.content }, i)) : (_jsx("div", { className: "text-[13px] leading-relaxed whitespace-pre-wrap", children: seg.content }, i))) })), message.toolCalls && message.toolCalls.length > 0 && (_jsx("div", { className: "mt-1", children: message.toolCalls.map((tc) => (_jsx(ToolCallCard, { call: tc }, tc.id))) })), !silentMode && hasActions && !message.toolCalls && (_jsxs("div", { className: "mt-2 rounded-lg border px-3 py-2 text-[12px]", style: {
+    return (_jsxs("div", { className: cn('flex gap-3', isLast && 'animate-fade-in'), children: [_jsx(AvatarAI, {}), _jsxs("div", { className: "flex-1 min-w-0 pt-0.5", children: [_jsx("div", { className: "text-[11px] font-semibold mb-2", style: { color: 'hsl(var(--muted-foreground))' }, children: AI_MODELS[message.model ?? '']?.label ?? 'IA' }), thinkings.length > 0 && (_jsx("div", { className: "space-y-1", children: thinkings.map((t) => (_jsx(ThinkingBlock, { content: t.content }, t.id))) })), prose && (_jsx("div", { style: { color: 'hsl(var(--foreground))' }, children: parseContentSegments(prose).map((seg, i) => seg.type === 'terminal' ? (_jsx(TerminalBlock, { content: seg.content }, i)) : (_jsx("div", { className: "text-[13px] leading-relaxed whitespace-pre-wrap", children: seg.content }, i))) })), message.toolCalls && message.toolCalls.length > 0 && (_jsx("div", { className: "mt-1", children: message.toolCalls.map((tc) => (_jsx(ToolCallCard, { call: tc }, tc.id))) })), !silentMode && hasActions && !message.toolCalls && !message.agentChanges && (_jsxs("div", { className: "mt-2 rounded-lg border px-3 py-2 text-[12px]", style: {
                             background: 'hsl(48 96% 53% / 0.08)',
                             borderColor: 'hsl(48 96% 53% / 0.3)',
                             color: 'hsl(48 96% 53%)',
-                        }, children: [_jsxs("div", { className: "font-semibold", children: ["\u26A1 ", fileCount > 0 && `${fileCount} archivo${fileCount > 1 ? 's' : ''}`, fileCount > 0 && runCount > 0 && ' · ', runCount > 0 && `${runCount} comando${runCount > 1 ? 's' : ''}`, ' ', "propuesto", (fileCount + runCount) > 1 ? 's' : ''] }), files.length > 0 && (_jsx("ul", { className: "mt-1 space-y-0.5 font-mono text-[11px] opacity-90", children: files.map((f, i) => _jsxs("li", { children: ["\u21B3 ", f] }, i)) })), _jsx("div", { className: "mt-1 text-[10px] opacity-70", children: "Revisalos en el editor y acept\u00E1/rechaz\u00E1 cada uno." })] }))] })] }));
+                        }, children: [_jsxs("div", { className: "font-semibold", children: ["\u26A1 ", fileCount > 0 && `${fileCount} archivo${fileCount > 1 ? 's' : ''}`, fileCount > 0 && runCount > 0 && ' · ', runCount > 0 && `${runCount} comando${runCount > 1 ? 's' : ''}`, ' ', "propuesto", (fileCount + runCount) > 1 ? 's' : ''] }), files.length > 0 && (_jsx("ul", { className: "mt-1 space-y-0.5 font-mono text-[11px] opacity-90", children: files.map((f, i) => _jsxs("li", { children: ["\u21B3 ", f] }, i)) })), _jsx("div", { className: "mt-1 text-[10px] opacity-70", children: "Revisalos en el editor y acept\u00E1/rechaz\u00E1 cada uno." })] })), message.agentChanges && message.agentChanges.length > 0 && (_jsx("div", { className: "mt-1", children: message.agentChanges.map((change, i) => (_jsx(DiffBlock, { path: change.path, oldContent: change.oldContent, newContent: change.newContent }, i))) }))] })] }));
 }
