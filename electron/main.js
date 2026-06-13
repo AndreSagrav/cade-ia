@@ -531,8 +531,15 @@ ipcMain.handle('ai:stream-start', async (event, payload) => {
         let errBuf = '';
         res.on('data', (c) => { errBuf += String(c || ''); });
         res.on('end', () => {
+          let detail = '';
+          try { const j = JSON.parse(errBuf); if (j?.error?.message) detail = j.error.message; else if (j?.message) detail = j.message; } catch {}
           let msg = `HTTP ${status}`;
-          try { const j = JSON.parse(errBuf); if (j?.error?.message) msg += `: ${j.error.message}`; else if (j?.message) msg += `: ${j.message}`; } catch {}
+          if (status === 410) msg = `⚠️ El modelo ya no está disponible en este proveedor (HTTP 410 Gone).\n\nProbablemente fue removido o renombrado. Seleccioná otro modelo en el selector arriba del chat.`;
+          else if (status === 401) msg = `🔐 Error de autenticación (HTTP 401). Verificá tu API key en Configuración.`;
+          else if (status === 429) msg = `⏳ Límite de tasa excedido (HTTP 429). Esperá unos segundos o cambiá de modelo.`;
+          else if (status === 500) msg = `🔥 Error interno del servidor (HTTP 500). El proveedor tiene problemas. Intentá más tarde.`;
+          else if (status === 503) msg = `🔧 Servicio no disponible (HTTP 503). El proveedor está en mantenimiento.`;
+          else if (detail) msg += `: ${detail}`;
           webContents.send('ai:stream:error', { sessionId, error: msg });
         });
         return;
@@ -672,4 +679,41 @@ ipcMain.handle('updates:install', async () => {
   } catch (e) {
     return { error: e?.message || 'Install failed' };
   }
+});
+
+/* ── Browser automation (Electron Chromium) ────────────────────────── */
+const browserWindows = new Map();
+
+ipcMain.handle('browser:open', async (_e, { url, width = 1280, height = 800 }) => {
+  const id = crypto.randomBytes(6).toString('hex');
+  const win = new BrowserWindow({
+    width,
+    height,
+    show: false,
+    webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true },
+  });
+  await win.loadURL(url);
+  browserWindows.set(id, win);
+  return { id, url };
+});
+
+ipcMain.handle('browser:screenshot', async (_e, { id }) => {
+  const win = browserWindows.get(id);
+  if (!win) return { error: 'Browser not found' };
+  const image = await win.capturePage();
+  const dataUrl = image.toDataURL();
+  return { image: dataUrl };
+});
+
+ipcMain.handle('browser:evaluate', async (_e, { id, script }) => {
+  const win = browserWindows.get(id);
+  if (!win) return { error: 'Browser not found' };
+  const result = await win.webContents.executeJavaScript(script);
+  return { result: String(result) };
+});
+
+ipcMain.handle('browser:close', async (_e, { id }) => {
+  const win = browserWindows.get(id);
+  if (win) { win.destroy(); browserWindows.delete(id); }
+  return { ok: true };
 });

@@ -504,7 +504,17 @@ async function streamAgentChat(): Promise<void> {
       const res = await response;
       if (!res.ok) {
         const errText = await res.text();
-        chatStore.addMessage({ id: Date.now().toString(36), role: 'assistant', content: `Error ${res.status}: ${errText.slice(0, 200)}`, timestamp: Date.now(), model: selectedModel, });
+        let detail = '';
+        try { const j = JSON.parse(errText); detail = j?.error?.message || j?.message || ''; } catch {}
+        let msg = `Error HTTP ${res.status}`;
+        if (res.status === 410) msg = `⚠️ El modelo ya no está disponible en este proveedor (HTTP 410 Gone).\n\nProbablemente fue removido o renombrado. Seleccioná otro modelo en el selector arriba del chat.`;
+        else if (res.status === 401) msg = `🔐 Error de autenticación (HTTP 401). Verificá tu API key en Configuración.`;
+        else if (res.status === 429) msg = `⏳ Límite de tasa excedido (HTTP 429). Esperá unos segundos o cambiá de modelo.`;
+        else if (res.status === 500) msg = `🔥 Error interno del servidor (HTTP 500). El proveedor tiene problemas. Intentá más tarde.`;
+        else if (res.status === 503) msg = `🔧 Servicio no disponible (HTTP 503). El proveedor está en mantenimiento.`;
+        else if (detail) msg += `: ${detail}`;
+        else msg += `: ${errText.slice(0, 200)}`;
+        chatStore.addMessage({ id: Date.now().toString(36), role: 'assistant', content: msg, timestamp: Date.now(), model: selectedModel, });
         chatStore.setStreaming(false);
         return;
       }
