@@ -564,6 +564,12 @@ function handleAgentEvent(event, data, toolCalls, agentChanges, appendContent) {
             if (data.type === 'thinking') {
                 useChatStore.getState().setAgentStatus('Razonando respuesta...');
             }
+            else if (data.type === 'self_healing') {
+                useChatStore.getState().setAgentStatus(`Self-healing: ${data.message}`);
+            }
+            else if (data.type === 'self_healing_failed') {
+                useChatStore.getState().setAgentStatus(`Self-healing falló: ${data.message}`);
+            }
             break;
         case 'tool_call':
             toolCalls.push({

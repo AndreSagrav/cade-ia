@@ -933,6 +933,15 @@ agentRouter.post('/', async (req: Request, res: Response) => {
         }
         conversationMessages.push(toolMsgPayload);
 
+        // Self-healing: track retries per tool call
+        const MAX_TOOL_RETRIES = 2;
+        const retryCounts = new Map<string, number>();
+
+        function isErrorResult(result: string): boolean {
+          const lower = result.toLowerCase();
+          return lower.includes('error') || lower.includes('falló') || lower.includes('no encontrado') || lower.includes('no se encontró') || lower.includes('not found') || lower.includes('failed') || lower.includes('permission denied') || lower.includes('does not exist') || lower.includes('is not a git repository');
+        }
+
         // Execute each tool call
         for (const tc of parsedToolCalls) {
           sendEvent('tool_call', {
@@ -956,6 +965,19 @@ agentRouter.post('/', async (req: Request, res: Response) => {
           // Add tool result to conversation
           const toolMsg = adapter.buildToolResult(tc.id, tc.name, result);
           conversationMessages.push(toolMsg);
+
+          // Self-healing: if tool failed, inject correction prompt
+          if (isErrorResult(result)) {
+            const currentRetries = retryCounts.get(tc.id) || 0;
+            if (currentRetries < MAX_TOOL_RETRIES) {
+              retryCounts.set(tc.id, currentRetries + 1);
+              const correctionPrompt = `⚠️ El tool ${tc.name} falló con: ${result.slice(0, 300)}. Corrige tu approach y reintenta con parámetros diferentes o usa otro tool.`;
+              conversationMessages.push({ role: 'user', content: correctionPrompt });
+              sendEvent('status', { type: 'self_healing', iteration, message: `Self-healing: reintentando ${tc.name} (${currentRetries + 1}/${MAX_TOOL_RETRIES})` });
+            } else {
+              sendEvent('status', { type: 'self_healing_failed', iteration, message: `${tc.name} agotó reintentos.` });
+            }
+          }
         }
 
         // Continue the loop — the AI will see the tool results

@@ -612,6 +612,10 @@ function handleAgentEvent(
     case 'status':
       if (data.type === 'thinking') {
         useChatStore.getState().setAgentStatus('Razonando respuesta...');
+      } else if (data.type === 'self_healing') {
+        useChatStore.getState().setAgentStatus(`Self-healing: ${data.message}`);
+      } else if (data.type === 'self_healing_failed') {
+        useChatStore.getState().setAgentStatus(`Self-healing falló: ${data.message}`);
       }
       break;
 
