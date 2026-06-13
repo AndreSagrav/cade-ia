@@ -196,6 +196,31 @@ function ToolCallCard({ call }) {
                             color: isDone ? meta.color : 'hsl(var(--warning))',
                         }, children: isDone ? '✓' : '⋯' })] }), args && (_jsx("div", { className: "px-3 pb-2", children: _jsx("code", { className: "block rounded bg-muted/40 px-2 py-1 text-[10px] font-mono text-muted-foreground truncate", children: args }) })), isDone && call.result && (_jsx("div", { className: "border-t px-3 py-2 text-[11px] text-muted-foreground", style: { borderColor: 'hsl(var(--border) / 0.5)' }, children: _jsx("pre", { className: "whitespace-pre-wrap break-words font-mono text-[10px]", style: { maxHeight: '120px', overflow: 'auto' }, children: typeof call.result === 'string' ? call.result.slice(0, 300) : JSON.stringify(call.result, null, 2).slice(0, 300) }) }))] }));
 }
+/* ── Terminal block inline ── */
+function TerminalBlock({ content }) {
+    return (_jsxs("div", { className: "my-2 rounded-lg border overflow-hidden font-mono text-[11px] leading-relaxed", style: {
+            borderColor: 'hsl(var(--border))',
+            background: '#11111b',
+        }, children: [_jsxs("div", { className: "flex items-center gap-2 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wide", style: { background: '#1e1e2e', color: '#6c7086', borderBottom: '1px solid hsl(var(--border) / 0.5)' }, children: [_jsx("span", { style: { color: '#a6e3a1' }, children: "$" }), _jsx("span", { children: "Terminal" })] }), _jsx("div", { className: "px-3 py-2 whitespace-pre-wrap", style: { color: '#cdd6f4' }, children: content })] }));
+}
+/* ── Parse content into segments (text vs terminal blocks) ── */
+function parseContentSegments(content) {
+    const segments = [];
+    const regex = /```terminal\n([\s\S]*?)\n```/g;
+    let lastIndex = 0;
+    let match;
+    while ((match = regex.exec(content)) !== null) {
+        if (match.index > lastIndex) {
+            segments.push({ type: 'text', content: content.slice(lastIndex, match.index) });
+        }
+        segments.push({ type: 'terminal', content: match[1] });
+        lastIndex = regex.lastIndex;
+    }
+    if (lastIndex < content.length) {
+        segments.push({ type: 'text', content: content.slice(lastIndex) });
+    }
+    return segments;
+}
 /* ── Parse thinking blocks from content ── */
 function parseThinkingBlocks(content) {
     const thinkings = [];
@@ -235,7 +260,7 @@ function MessageBubble({ message, isLast }) {
     const { prose, fileCount, runCount, files } = parseAgentMessage(rawProse);
     const { silentMode } = useChatStore();
     const hasActions = fileCount + runCount > 0;
-    return (_jsxs("div", { className: cn('flex gap-3', isLast && 'animate-fade-in'), children: [_jsx(AvatarAI, {}), _jsxs("div", { className: "flex-1 min-w-0 pt-0.5", children: [_jsx("div", { className: "text-[11px] font-semibold mb-2", style: { color: 'hsl(var(--muted-foreground))' }, children: AI_MODELS[message.model ?? '']?.label ?? 'IA' }), thinkings.length > 0 && (_jsx("div", { className: "space-y-1", children: thinkings.map((t) => (_jsx(ThinkingBlock, { content: t.content }, t.id))) })), prose && (_jsx("div", { className: "text-[13px] leading-relaxed whitespace-pre-wrap", style: { color: 'hsl(var(--foreground))' }, children: prose })), message.toolCalls && message.toolCalls.length > 0 && (_jsx("div", { className: "mt-1", children: message.toolCalls.map((tc) => (_jsx(ToolCallCard, { call: tc }, tc.id))) })), !silentMode && hasActions && !message.toolCalls && (_jsxs("div", { className: "mt-2 rounded-lg border px-3 py-2 text-[12px]", style: {
+    return (_jsxs("div", { className: cn('flex gap-3', isLast && 'animate-fade-in'), children: [_jsx(AvatarAI, {}), _jsxs("div", { className: "flex-1 min-w-0 pt-0.5", children: [_jsx("div", { className: "text-[11px] font-semibold mb-2", style: { color: 'hsl(var(--muted-foreground))' }, children: AI_MODELS[message.model ?? '']?.label ?? 'IA' }), thinkings.length > 0 && (_jsx("div", { className: "space-y-1", children: thinkings.map((t) => (_jsx(ThinkingBlock, { content: t.content }, t.id))) })), prose && (_jsx("div", { style: { color: 'hsl(var(--foreground))' }, children: parseContentSegments(prose).map((seg, i) => seg.type === 'terminal' ? (_jsx(TerminalBlock, { content: seg.content }, i)) : (_jsx("div", { className: "text-[13px] leading-relaxed whitespace-pre-wrap", children: seg.content }, i))) })), message.toolCalls && message.toolCalls.length > 0 && (_jsx("div", { className: "mt-1", children: message.toolCalls.map((tc) => (_jsx(ToolCallCard, { call: tc }, tc.id))) })), !silentMode && hasActions && !message.toolCalls && (_jsxs("div", { className: "mt-2 rounded-lg border px-3 py-2 text-[12px]", style: {
                             background: 'hsl(48 96% 53% / 0.08)',
                             borderColor: 'hsl(48 96% 53% / 0.3)',
                             color: 'hsl(48 96% 53%)',

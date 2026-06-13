@@ -168,24 +168,48 @@ export async function processAgentResponse(content) {
                 const wapi = (typeof window !== 'undefined' ? window.api : null);
                 const useIpc = !!(wapi && wapi.shell && wapi.shell.run);
                 (async () => {
+                    let result;
                     try {
                         if (useIpc) {
-                            // Parse simple shell commands for IPC (single command + args)
                             const cmd = change.content;
                             const isWin = navigator.platform.startsWith('Win');
                             const shell = isWin ? 'powershell.exe' : (process.env?.SHELL || 'bash');
                             const args = isWin ? ['-NoProfile', '-NonInteractive', '-Command', cmd] : ['-c', cmd];
-                            await wapi.shell.run(shell, args, rootPath, undefined, 120000);
+                            result = await wapi.shell.run(shell, args, rootPath, undefined, 120000);
                         }
                         else {
-                            await api.runCommand({ cmd: change.content, cwd: rootPath });
+                            result = await api.runCommand({ cmd: change.content, cwd: rootPath });
                         }
                         store.addPendingChange({ ...change, status: 'accepted' });
                         store.updateChangeStatus(change.id, 'accepted');
+                        // Post terminal output to chat
+                        const stdout = result?.stdout || '';
+                        const stderr = result?.stderr || '';
+                        const code = result?.code ?? 0;
+                        if (stdout || stderr) {
+                            const output = [
+                                `$ ${change.content}`,
+                                stdout ? stdout.trim() : '',
+                                stderr ? `stderr: ${stderr.trim()}` : '',
+                                code !== 0 ? `exit ${code}` : '',
+                            ].filter(Boolean).join('\n');
+                            chat.addMessage({
+                                id: Date.now().toString(36),
+                                role: 'assistant',
+                                content: `\`\`\`terminal\n${output}\n\`\`\``,
+                                timestamp: Date.now(),
+                            });
+                        }
                     }
                     catch (e) {
                         store.addPendingChange({ ...change, status: 'rejected' });
                         store.updateChangeStatus(change.id, 'rejected');
+                        chat.addMessage({
+                            id: Date.now().toString(36),
+                            role: 'assistant',
+                            content: `\`\`\`terminal\n$ ${change.content}\nError: ${e?.message || 'Command failed'}\n\`\`\``,
+                            timestamp: Date.now(),
+                        });
                     }
                 })();
             }

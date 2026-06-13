@@ -579,6 +579,49 @@ function ToolCallCard({ call }: { call: any }) {
   );
 }
 
+/* ── Terminal block inline ── */
+function TerminalBlock({ content }: { content: string }) {
+  return (
+    <div
+      className="my-2 rounded-lg border overflow-hidden font-mono text-[11px] leading-relaxed"
+      style={{
+        borderColor: 'hsl(var(--border))',
+        background: '#11111b',
+      }}
+    >
+      <div
+        className="flex items-center gap-2 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wide"
+        style={{ background: '#1e1e2e', color: '#6c7086', borderBottom: '1px solid hsl(var(--border) / 0.5)' }}
+      >
+        <span style={{ color: '#a6e3a1' }}>$</span>
+        <span>Terminal</span>
+      </div>
+      <div className="px-3 py-2 whitespace-pre-wrap" style={{ color: '#cdd6f4' }}>
+        {content}
+      </div>
+    </div>
+  );
+}
+
+/* ── Parse content into segments (text vs terminal blocks) ── */
+function parseContentSegments(content: string): { type: 'text' | 'terminal'; content: string }[] {
+  const segments: { type: 'text' | 'terminal'; content: string }[] = [];
+  const regex = /```terminal\n([\s\S]*?)\n```/g;
+  let lastIndex = 0;
+  let match;
+  while ((match = regex.exec(content)) !== null) {
+    if (match.index > lastIndex) {
+      segments.push({ type: 'text', content: content.slice(lastIndex, match.index) });
+    }
+    segments.push({ type: 'terminal', content: match[1] });
+    lastIndex = regex.lastIndex;
+  }
+  if (lastIndex < content.length) {
+    segments.push({ type: 'text', content: content.slice(lastIndex) });
+  }
+  return segments;
+}
+
 /* ── Parse thinking blocks from content ── */
 function parseThinkingBlocks(content: string): { prose: string; thinkings: { id: number; content: string }[] } {
   const thinkings: { id: number; content: string }[] = [];
@@ -683,11 +726,19 @@ function MessageBubble({ message, isLast }: { message: any; isLast: boolean }) {
           </div>
         )}
         {prose && (
-          <div
-            className="text-[13px] leading-relaxed whitespace-pre-wrap"
-            style={{ color: 'hsl(var(--foreground))' }}
-          >
-            {prose}
+          <div style={{ color: 'hsl(var(--foreground))' }}>
+            {parseContentSegments(prose).map((seg, i) =>
+              seg.type === 'terminal' ? (
+                <TerminalBlock key={i} content={seg.content} />
+              ) : (
+                <div
+                  key={i}
+                  className="text-[13px] leading-relaxed whitespace-pre-wrap"
+                >
+                  {seg.content}
+                </div>
+              )
+            )}
           </div>
         )}
         {message.toolCalls && message.toolCalls.length > 0 && (
