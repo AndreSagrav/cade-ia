@@ -756,6 +756,51 @@ function TimelineBlock({ events }: { events: string[] }) {
   );
 }
 
+/* ── Follow-up chips ── */
+function parseFollowUpBlocks(content: string): { prose: string; followups: string[] } {
+  const followups: string[] = [];
+  let prose = content;
+  const regex = /<followup>([\s\S]*?)<\/followup>/gi;
+  let match;
+  while ((match = regex.exec(content)) !== null) {
+    const raw = match[1].trim();
+    followups.push(...raw.split('\n').map((s) => s.replace(/^\s*[-*\d.)\]]\s*/, '').trim()).filter(Boolean));
+  }
+  prose = prose.replace(regex, '').replace(/\n{3,}/g, '\n\n').trim();
+  return { prose, followups };
+}
+
+function FollowUpChips({ questions }: { questions: string[] }) {
+  if (!questions.length) return null;
+  return (
+    <div className="mt-3 flex flex-wrap gap-2">
+      {questions.map((q, i) => (
+        <button
+          key={i}
+          onClick={() => {
+            const chatStore = useChatStore.getState();
+            chatStore.addMessage({
+              id: Date.now().toString(36),
+              role: 'user',
+              content: q,
+              timestamp: Date.now(),
+            });
+            streamChat(q);
+          }}
+          className="rounded-full border px-3 py-1.5 text-[11px] font-medium transition-all hover:scale-[1.02] active:scale-95"
+          style={{
+            borderColor: 'hsl(var(--accent) / 0.35)',
+            background: 'hsl(var(--accent) / 0.08)',
+            color: 'hsl(var(--accent))',
+          }}
+        >
+          {q}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 /* ── Terminal block inline ── */
 function TerminalBlock({ content }: { content: string }) {
   return (
@@ -886,7 +931,8 @@ function MessageBubble({ message, isLast }: { message: any; isLast: boolean }) {
   const { prose: thinkingProse, thinkings } = parseThinkingBlocks(message.content || '');
   const { prose: planProse, plans } = parsePlanBlocks(thinkingProse);
   const { prose: timelineProse, timelines } = parseTimelineBlocks(planProse);
-  const { prose, fileCount, runCount, files } = parseAgentMessage(timelineProse);
+  const { prose: followupProse, followups } = parseFollowUpBlocks(timelineProse);
+  const { prose, fileCount, runCount, files } = parseAgentMessage(followupProse);
   const { silentMode } = useChatStore();
   const hasActions = fileCount + runCount > 0;
 
@@ -934,6 +980,7 @@ function MessageBubble({ message, isLast }: { message: any; isLast: boolean }) {
             )}
           </div>
         )}
+        {followups.length > 0 && <FollowUpChips questions={followups} />}
         {message.toolCalls && message.toolCalls.length > 0 && (
           <div className="mt-1">
             {message.toolCalls.map((tc: any) => (

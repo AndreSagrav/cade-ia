@@ -285,6 +285,37 @@ function parseTimelineBlocks(content) {
 function TimelineBlock({ events }) {
     return (_jsxs("div", { className: "my-2 rounded-lg border overflow-hidden", style: { borderColor: 'hsl(var(--border))', background: 'hsl(var(--muted) / 0.1)' }, children: [_jsxs("div", { className: "flex items-center gap-2 px-3 py-2 text-[11px] font-semibold uppercase tracking-wide", style: { background: 'hsl(var(--muted) / 0.25)', borderBottom: '1px solid hsl(var(--border) / 0.5)', color: '#6c7086' }, children: [_jsx("span", { style: { color: '#cba6f7' }, children: "\u29D6" }), _jsx("span", { children: "Timeline" })] }), _jsxs("div", { className: "relative px-3 py-2", children: [_jsx("div", { className: "absolute left-[22px] top-2 bottom-2 w-px", style: { background: 'hsl(var(--border))' } }), _jsx("div", { className: "space-y-2", children: events.map((event, i) => (_jsxs("div", { className: "flex items-start gap-2 text-[11px]", children: [_jsx("span", { className: "relative z-10 mt-0.5 flex h-2 w-2 shrink-0 rounded-full", style: { background: '#cba6f7' } }), _jsx("span", { style: { color: 'hsl(var(--muted-foreground))' }, children: event })] }, i))) })] })] }));
 }
+/* ── Follow-up chips ── */
+function parseFollowUpBlocks(content) {
+    const followups = [];
+    let prose = content;
+    const regex = /<followup>([\s\S]*?)<\/followup>/gi;
+    let match;
+    while ((match = regex.exec(content)) !== null) {
+        const raw = match[1].trim();
+        followups.push(...raw.split('\n').map((s) => s.replace(/^\s*[-*\d.)\]]\s*/, '').trim()).filter(Boolean));
+    }
+    prose = prose.replace(regex, '').replace(/\n{3,}/g, '\n\n').trim();
+    return { prose, followups };
+}
+function FollowUpChips({ questions }) {
+    if (!questions.length)
+        return null;
+    return (_jsx("div", { className: "mt-3 flex flex-wrap gap-2", children: questions.map((q, i) => (_jsx("button", { onClick: () => {
+                const chatStore = useChatStore.getState();
+                chatStore.addMessage({
+                    id: Date.now().toString(36),
+                    role: 'user',
+                    content: q,
+                    timestamp: Date.now(),
+                });
+                streamChat(q);
+            }, className: "rounded-full border px-3 py-1.5 text-[11px] font-medium transition-all hover:scale-[1.02] active:scale-95", style: {
+                borderColor: 'hsl(var(--accent) / 0.35)',
+                background: 'hsl(var(--accent) / 0.08)',
+                color: 'hsl(var(--accent))',
+            }, children: q }, i))) }));
+}
 /* ── Terminal block inline ── */
 function TerminalBlock({ content }) {
     return (_jsxs("div", { className: "my-2 rounded-lg border overflow-hidden font-mono text-[11px] leading-relaxed", style: {
@@ -348,10 +379,11 @@ function MessageBubble({ message, isLast }) {
     const { prose: thinkingProse, thinkings } = parseThinkingBlocks(message.content || '');
     const { prose: planProse, plans } = parsePlanBlocks(thinkingProse);
     const { prose: timelineProse, timelines } = parseTimelineBlocks(planProse);
-    const { prose, fileCount, runCount, files } = parseAgentMessage(timelineProse);
+    const { prose: followupProse, followups } = parseFollowUpBlocks(timelineProse);
+    const { prose, fileCount, runCount, files } = parseAgentMessage(followupProse);
     const { silentMode } = useChatStore();
     const hasActions = fileCount + runCount > 0;
-    return (_jsxs("div", { className: cn('flex gap-3', isLast && 'animate-fade-in'), children: [_jsx(AvatarAI, {}), _jsxs("div", { className: "flex-1 min-w-0 pt-0.5", children: [_jsx("div", { className: "text-[11px] font-semibold mb-2", style: { color: 'hsl(var(--muted-foreground))' }, children: AI_MODELS[message.model ?? '']?.label ?? 'IA' }), thinkings.length > 0 && (_jsx("div", { className: "space-y-1", children: thinkings.map((t) => (_jsx(ThinkingBlock, { content: t.content }, t.id))) })), plans.length > 0 && (_jsx("div", { className: "space-y-1", children: plans.map((p) => (_jsx(PlanBlock, { steps: p.steps }, p.id))) })), timelines.length > 0 && (_jsx("div", { className: "space-y-1", children: timelines.map((tl) => (_jsx(TimelineBlock, { events: tl.events }, tl.id))) })), prose && (_jsx("div", { style: { color: 'hsl(var(--foreground))' }, children: parseContentSegments(prose).map((seg, i) => seg.type === 'terminal' ? (_jsx(TerminalBlock, { content: seg.content }, i)) : (_jsx("div", { className: "text-[13px] leading-relaxed whitespace-pre-wrap", children: seg.content }, i))) })), message.toolCalls && message.toolCalls.length > 0 && (_jsx("div", { className: "mt-1", children: message.toolCalls.map((tc) => (_jsx(ToolCallCard, { call: tc }, tc.id))) })), !silentMode && hasActions && !message.toolCalls && !message.agentChanges && (_jsxs("div", { className: "mt-2 rounded-lg border px-3 py-2 text-[12px]", style: {
+    return (_jsxs("div", { className: cn('flex gap-3', isLast && 'animate-fade-in'), children: [_jsx(AvatarAI, {}), _jsxs("div", { className: "flex-1 min-w-0 pt-0.5", children: [_jsx("div", { className: "text-[11px] font-semibold mb-2", style: { color: 'hsl(var(--muted-foreground))' }, children: AI_MODELS[message.model ?? '']?.label ?? 'IA' }), thinkings.length > 0 && (_jsx("div", { className: "space-y-1", children: thinkings.map((t) => (_jsx(ThinkingBlock, { content: t.content }, t.id))) })), plans.length > 0 && (_jsx("div", { className: "space-y-1", children: plans.map((p) => (_jsx(PlanBlock, { steps: p.steps }, p.id))) })), timelines.length > 0 && (_jsx("div", { className: "space-y-1", children: timelines.map((tl) => (_jsx(TimelineBlock, { events: tl.events }, tl.id))) })), prose && (_jsx("div", { style: { color: 'hsl(var(--foreground))' }, children: parseContentSegments(prose).map((seg, i) => seg.type === 'terminal' ? (_jsx(TerminalBlock, { content: seg.content }, i)) : (_jsx("div", { className: "text-[13px] leading-relaxed whitespace-pre-wrap", children: seg.content }, i))) })), followups.length > 0 && _jsx(FollowUpChips, { questions: followups }), message.toolCalls && message.toolCalls.length > 0 && (_jsx("div", { className: "mt-1", children: message.toolCalls.map((tc) => (_jsx(ToolCallCard, { call: tc }, tc.id))) })), !silentMode && hasActions && !message.toolCalls && !message.agentChanges && (_jsxs("div", { className: "mt-2 rounded-lg border px-3 py-2 text-[12px]", style: {
                             background: 'hsl(48 96% 53% / 0.08)',
                             borderColor: 'hsl(48 96% 53% / 0.3)',
                             color: 'hsl(48 96% 53%)',
