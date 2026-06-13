@@ -249,6 +249,42 @@ function DiffBlock({ path, oldContent, newContent }) {
                                     color: row.type === 'add' ? '#a6e3a1' : row.type === 'same' ? '#6c7086' : '#1e1e2e40',
                                 }, title: row.newLine ?? '', children: row.newLine ?? '' }, `n-${idx}`)] })))] }))] }));
 }
+/* ── Plan block (checklist) ── */
+function parsePlanBlocks(content) {
+    const plans = [];
+    let prose = content;
+    const regex = /<plan>([\s\S]*?)<\/plan>/gi;
+    let match;
+    let id = 0;
+    while ((match = regex.exec(content)) !== null) {
+        const raw = match[1].trim();
+        const steps = raw.split('\n').map((s) => s.replace(/^\s*[-*\d.)\]]\s*/, '').trim()).filter(Boolean);
+        plans.push({ id: id++, steps });
+    }
+    prose = prose.replace(regex, '').replace(/\n{3,}/g, '\n\n').trim();
+    return { prose, plans };
+}
+function PlanBlock({ steps }) {
+    return (_jsxs("div", { className: "my-2 rounded-lg border overflow-hidden", style: { borderColor: 'hsl(var(--border))', background: 'hsl(var(--muted) / 0.15)' }, children: [_jsxs("div", { className: "flex items-center gap-2 px-3 py-2 text-[11px] font-semibold uppercase tracking-wide", style: { background: 'hsl(var(--muted) / 0.3)', borderBottom: '1px solid hsl(var(--border) / 0.5)', color: '#6c7086' }, children: [_jsx("span", { style: { color: '#89b4fa' }, children: "#" }), _jsx("span", { children: "Plan de trabajo" })] }), _jsx("div", { className: "px-3 py-2 space-y-1", children: steps.map((step, i) => (_jsxs("div", { className: "flex items-start gap-2 text-[12px]", children: [_jsx("span", { className: "mt-0.5 flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-sm border text-[9px] font-bold", style: { borderColor: 'hsl(var(--border))', color: '#a6e3a1' }, children: i + 1 }), _jsx("span", { style: { color: 'hsl(var(--foreground))' }, children: step })] }, i))) })] }));
+}
+/* ── Timeline block ── */
+function parseTimelineBlocks(content) {
+    const timelines = [];
+    let prose = content;
+    const regex = /<timeline>([\s\S]*?)<\/timeline>/gi;
+    let match;
+    let id = 0;
+    while ((match = regex.exec(content)) !== null) {
+        const raw = match[1].trim();
+        const events = raw.split('\n').map((s) => s.replace(/^\s*[-*]\s*/, '').trim()).filter(Boolean);
+        timelines.push({ id: id++, events });
+    }
+    prose = prose.replace(regex, '').replace(/\n{3,}/g, '\n\n').trim();
+    return { prose, timelines };
+}
+function TimelineBlock({ events }) {
+    return (_jsxs("div", { className: "my-2 rounded-lg border overflow-hidden", style: { borderColor: 'hsl(var(--border))', background: 'hsl(var(--muted) / 0.1)' }, children: [_jsxs("div", { className: "flex items-center gap-2 px-3 py-2 text-[11px] font-semibold uppercase tracking-wide", style: { background: 'hsl(var(--muted) / 0.25)', borderBottom: '1px solid hsl(var(--border) / 0.5)', color: '#6c7086' }, children: [_jsx("span", { style: { color: '#cba6f7' }, children: "\u29D6" }), _jsx("span", { children: "Timeline" })] }), _jsxs("div", { className: "relative px-3 py-2", children: [_jsx("div", { className: "absolute left-[22px] top-2 bottom-2 w-px", style: { background: 'hsl(var(--border))' } }), _jsx("div", { className: "space-y-2", children: events.map((event, i) => (_jsxs("div", { className: "flex items-start gap-2 text-[11px]", children: [_jsx("span", { className: "relative z-10 mt-0.5 flex h-2 w-2 shrink-0 rounded-full", style: { background: '#cba6f7' } }), _jsx("span", { style: { color: 'hsl(var(--muted-foreground))' }, children: event })] }, i))) })] })] }));
+}
 /* ── Terminal block inline ── */
 function TerminalBlock({ content }) {
     return (_jsxs("div", { className: "my-2 rounded-lg border overflow-hidden font-mono text-[11px] leading-relaxed", style: {
@@ -309,11 +345,13 @@ function MessageBubble({ message, isLast }) {
                             color: 'hsl(var(--foreground))',
                         }, children: [_jsx("div", { className: "whitespace-pre-wrap", children: message.content }), message.attachments?.map((att) => (_jsx("div", { className: "mt-2 rounded-md overflow-hidden border border-[#333]", children: _jsx("img", { src: att.content, alt: att.name, className: "max-w-full h-auto max-h-[300px]" }) }, att.id)))] })] }) }));
     }
-    const { prose: rawProse, thinkings } = parseThinkingBlocks(message.content || '');
-    const { prose, fileCount, runCount, files } = parseAgentMessage(rawProse);
+    const { prose: thinkingProse, thinkings } = parseThinkingBlocks(message.content || '');
+    const { prose: planProse, plans } = parsePlanBlocks(thinkingProse);
+    const { prose: timelineProse, timelines } = parseTimelineBlocks(planProse);
+    const { prose, fileCount, runCount, files } = parseAgentMessage(timelineProse);
     const { silentMode } = useChatStore();
     const hasActions = fileCount + runCount > 0;
-    return (_jsxs("div", { className: cn('flex gap-3', isLast && 'animate-fade-in'), children: [_jsx(AvatarAI, {}), _jsxs("div", { className: "flex-1 min-w-0 pt-0.5", children: [_jsx("div", { className: "text-[11px] font-semibold mb-2", style: { color: 'hsl(var(--muted-foreground))' }, children: AI_MODELS[message.model ?? '']?.label ?? 'IA' }), thinkings.length > 0 && (_jsx("div", { className: "space-y-1", children: thinkings.map((t) => (_jsx(ThinkingBlock, { content: t.content }, t.id))) })), prose && (_jsx("div", { style: { color: 'hsl(var(--foreground))' }, children: parseContentSegments(prose).map((seg, i) => seg.type === 'terminal' ? (_jsx(TerminalBlock, { content: seg.content }, i)) : (_jsx("div", { className: "text-[13px] leading-relaxed whitespace-pre-wrap", children: seg.content }, i))) })), message.toolCalls && message.toolCalls.length > 0 && (_jsx("div", { className: "mt-1", children: message.toolCalls.map((tc) => (_jsx(ToolCallCard, { call: tc }, tc.id))) })), !silentMode && hasActions && !message.toolCalls && !message.agentChanges && (_jsxs("div", { className: "mt-2 rounded-lg border px-3 py-2 text-[12px]", style: {
+    return (_jsxs("div", { className: cn('flex gap-3', isLast && 'animate-fade-in'), children: [_jsx(AvatarAI, {}), _jsxs("div", { className: "flex-1 min-w-0 pt-0.5", children: [_jsx("div", { className: "text-[11px] font-semibold mb-2", style: { color: 'hsl(var(--muted-foreground))' }, children: AI_MODELS[message.model ?? '']?.label ?? 'IA' }), thinkings.length > 0 && (_jsx("div", { className: "space-y-1", children: thinkings.map((t) => (_jsx(ThinkingBlock, { content: t.content }, t.id))) })), plans.length > 0 && (_jsx("div", { className: "space-y-1", children: plans.map((p) => (_jsx(PlanBlock, { steps: p.steps }, p.id))) })), timelines.length > 0 && (_jsx("div", { className: "space-y-1", children: timelines.map((tl) => (_jsx(TimelineBlock, { events: tl.events }, tl.id))) })), prose && (_jsx("div", { style: { color: 'hsl(var(--foreground))' }, children: parseContentSegments(prose).map((seg, i) => seg.type === 'terminal' ? (_jsx(TerminalBlock, { content: seg.content }, i)) : (_jsx("div", { className: "text-[13px] leading-relaxed whitespace-pre-wrap", children: seg.content }, i))) })), message.toolCalls && message.toolCalls.length > 0 && (_jsx("div", { className: "mt-1", children: message.toolCalls.map((tc) => (_jsx(ToolCallCard, { call: tc }, tc.id))) })), !silentMode && hasActions && !message.toolCalls && !message.agentChanges && (_jsxs("div", { className: "mt-2 rounded-lg border px-3 py-2 text-[12px]", style: {
                             background: 'hsl(48 96% 53% / 0.08)',
                             borderColor: 'hsl(48 96% 53% / 0.3)',
                             color: 'hsl(48 96% 53%)',

@@ -669,6 +669,93 @@ function DiffBlock({ path, oldContent, newContent }: { path: string; oldContent:
   );
 }
 
+/* ── Plan block (checklist) ── */
+function parsePlanBlocks(content: string): { prose: string; plans: { id: number; steps: string[] }[] } {
+  const plans: { id: number; steps: string[] }[] = [];
+  let prose = content;
+  const regex = /<plan>([\s\S]*?)<\/plan>/gi;
+  let match;
+  let id = 0;
+  while ((match = regex.exec(content)) !== null) {
+    const raw = match[1].trim();
+    const steps = raw.split('\n').map((s) => s.replace(/^\s*[-*\d.)\]]\s*/, '').trim()).filter(Boolean);
+    plans.push({ id: id++, steps });
+  }
+  prose = prose.replace(regex, '').replace(/\n{3,}/g, '\n\n').trim();
+  return { prose, plans };
+}
+
+function PlanBlock({ steps }: { steps: string[] }) {
+  return (
+    <div
+      className="my-2 rounded-lg border overflow-hidden"
+      style={{ borderColor: 'hsl(var(--border))', background: 'hsl(var(--muted) / 0.15)' }}
+    >
+      <div
+        className="flex items-center gap-2 px-3 py-2 text-[11px] font-semibold uppercase tracking-wide"
+        style={{ background: 'hsl(var(--muted) / 0.3)', borderBottom: '1px solid hsl(var(--border) / 0.5)', color: '#6c7086' }}
+      >
+        <span style={{ color: '#89b4fa' }}>#</span>
+        <span>Plan de trabajo</span>
+      </div>
+      <div className="px-3 py-2 space-y-1">
+        {steps.map((step, i) => (
+          <div key={i} className="flex items-start gap-2 text-[12px]">
+            <span className="mt-0.5 flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-sm border text-[9px] font-bold" style={{ borderColor: 'hsl(var(--border))', color: '#a6e3a1' }}>
+              {i + 1}
+            </span>
+            <span style={{ color: 'hsl(var(--foreground))' }}>{step}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/* ── Timeline block ── */
+function parseTimelineBlocks(content: string): { prose: string; timelines: { id: number; events: string[] }[] } {
+  const timelines: { id: number; events: string[] }[] = [];
+  let prose = content;
+  const regex = /<timeline>([\s\S]*?)<\/timeline>/gi;
+  let match;
+  let id = 0;
+  while ((match = regex.exec(content)) !== null) {
+    const raw = match[1].trim();
+    const events = raw.split('\n').map((s) => s.replace(/^\s*[-*]\s*/, '').trim()).filter(Boolean);
+    timelines.push({ id: id++, events });
+  }
+  prose = prose.replace(regex, '').replace(/\n{3,}/g, '\n\n').trim();
+  return { prose, timelines };
+}
+
+function TimelineBlock({ events }: { events: string[] }) {
+  return (
+    <div
+      className="my-2 rounded-lg border overflow-hidden"
+      style={{ borderColor: 'hsl(var(--border))', background: 'hsl(var(--muted) / 0.1)' }}
+    >
+      <div
+        className="flex items-center gap-2 px-3 py-2 text-[11px] font-semibold uppercase tracking-wide"
+        style={{ background: 'hsl(var(--muted) / 0.25)', borderBottom: '1px solid hsl(var(--border) / 0.5)', color: '#6c7086' }}
+      >
+        <span style={{ color: '#cba6f7' }}>⧖</span>
+        <span>Timeline</span>
+      </div>
+      <div className="relative px-3 py-2">
+        <div className="absolute left-[22px] top-2 bottom-2 w-px" style={{ background: 'hsl(var(--border))' }} />
+        <div className="space-y-2">
+          {events.map((event, i) => (
+            <div key={i} className="flex items-start gap-2 text-[11px]">
+              <span className="relative z-10 mt-0.5 flex h-2 w-2 shrink-0 rounded-full" style={{ background: '#cba6f7' }} />
+              <span style={{ color: 'hsl(var(--muted-foreground))' }}>{event}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ── Terminal block inline ── */
 function TerminalBlock({ content }: { content: string }) {
   return (
@@ -796,8 +883,10 @@ function MessageBubble({ message, isLast }: { message: any; isLast: boolean }) {
     );
   }
 
-  const { prose: rawProse, thinkings } = parseThinkingBlocks(message.content || '');
-  const { prose, fileCount, runCount, files } = parseAgentMessage(rawProse);
+  const { prose: thinkingProse, thinkings } = parseThinkingBlocks(message.content || '');
+  const { prose: planProse, plans } = parsePlanBlocks(thinkingProse);
+  const { prose: timelineProse, timelines } = parseTimelineBlocks(planProse);
+  const { prose, fileCount, runCount, files } = parseAgentMessage(timelineProse);
   const { silentMode } = useChatStore();
   const hasActions = fileCount + runCount > 0;
 
@@ -812,6 +901,20 @@ function MessageBubble({ message, isLast }: { message: any; isLast: boolean }) {
           <div className="space-y-1">
             {thinkings.map((t) => (
               <ThinkingBlock key={t.id} content={t.content} />
+            ))}
+          </div>
+        )}
+        {plans.length > 0 && (
+          <div className="space-y-1">
+            {plans.map((p) => (
+              <PlanBlock key={p.id} steps={p.steps} />
+            ))}
+          </div>
+        )}
+        {timelines.length > 0 && (
+          <div className="space-y-1">
+            {timelines.map((tl) => (
+              <TimelineBlock key={tl.id} events={tl.events} />
             ))}
           </div>
         )}
