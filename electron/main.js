@@ -138,16 +138,6 @@ app.on('quit', () => {
   }
 });
 
-// ── Updates IPC ──────────────────────────────────────────────────────
-ipcMain.handle('updates:check', async () => {
-  if (!AutoUpdaterRef) return { error: 'autoUpdater unavailable' };
-  try { await AutoUpdaterRef.checkForUpdates(); return { ok: true }; } catch (e) { return { error: e?.message || 'check failed' }; }
-});
-ipcMain.handle('updates:install', async () => {
-  if (!AutoUpdaterRef) return { error: 'autoUpdater unavailable' };
-  try { await AutoUpdaterRef.quitAndInstall(); return { ok: true }; } catch (e) { return { error: e?.message || 'install failed' }; }
-});
-
 // ── IPC handlers (production, no HTTP) ──────────────────────────────
 const tokens = new Set();
 const AUTH_USER = process.env.AUTH_USER ?? '';
