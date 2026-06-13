@@ -3,7 +3,7 @@ import { useSettingsStore } from '@/store/settings-store';
 import { useEditorStore } from '@/store/editor-store';
 import { useChatStore } from '@/store/chat-store';
 import { AI_MODELS } from '@shared/models';
-import { processAgentResponse } from './agent';
+import { processAgentResponse, gitSync } from './agent';
 import { getLanguageFromPath } from './utils';
 /** Flatten file tree into a compact path list */
 function flattenTree(entries, prefix = '') {
@@ -518,6 +518,22 @@ async function streamAgentChat() {
         const completionTokens = Math.ceil(finalContent.length / 4);
         chatStore.incrementModelUsage(actualModelId, promptTokens + completionTokens);
         // file changes are now processed natively in handleAgentEvent
+        // Auto-sync to GitHub if enabled and there were file changes
+        if (agentChanges.length > 0 && useChatStore.getState().autoSync) {
+            const rootPath = useEditorStore.getState().rootPath;
+            if (rootPath) {
+                (async () => {
+                    const res = await gitSync(rootPath);
+                    if (!res.ok) {
+                        chatStore.addMessage({
+                            id: Date.now().toString(36), role: 'assistant',
+                            content: `⚠️ Sync falló: ${res.message}`,
+                            timestamp: Date.now(), model: actualModelId,
+                        });
+                    }
+                })();
+            }
+        }
     }
     catch (e) {
         if (e.name !== 'AbortError') {

@@ -17,6 +17,7 @@ export const useChatStore = create()(persist((set, get) => ({
     silentMode: true,
     autoApply: true,
     autoRun: false,
+    autoSync: false,
     selectedModel: 'gemini-2.5-flash',
     recentModels: [],
     modelUsage: {},
@@ -180,6 +181,7 @@ export const useChatStore = create()(persist((set, get) => ({
     setSilentMode: (enabled) => set({ silentMode: enabled }),
     setAutoApply: (enabled) => set({ autoApply: enabled }),
     setAutoRun: (enabled) => set({ autoRun: enabled }),
+    setAutoSync: (enabled) => set({ autoSync: enabled }),
     setSelectedModel: (model) => {
         set({ selectedModel: model });
         get().addRecentModel(model);
@@ -203,5 +205,6 @@ export const useChatStore = create()(persist((set, get) => ({
         silentMode: state.silentMode,
         autoApply: state.autoApply,
         autoRun: state.autoRun,
+        autoSync: state.autoSync,
     }),
 }));

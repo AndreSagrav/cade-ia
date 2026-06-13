@@ -21,7 +21,7 @@ export function ChatPanel() {
     selectedModel, agentMode, setAgentMode,
     addMessage, createSession, closeSession, reopenSession, deleteSession,
     setActiveSession, setHistoryOpen, abortAgent,
-    silentMode, setSilentMode, autoApply, setAutoApply, autoRun, setAutoRun
+    silentMode, setSilentMode, autoApply, setAutoApply, autoRun, setAutoRun, autoSync, setAutoSync
   } = useChatStore();
 
   const openSessions = openSessionIds
@@ -208,6 +208,20 @@ export function ChatPanel() {
             title="Ejecuta comandos del agente sin confirmar"
           >
             Autorun
+          </button>
+          <button
+            onClick={() => setAutoSync(!autoSync)}
+            className={cn(
+              'flex items-center gap-1 rounded-full px-2 py-1 text-[10px] font-semibold transition-all',
+              autoSync ? 'text-accent' : 'text-muted-foreground hover:text-foreground',
+            )}
+            style={{
+              background: autoSync ? 'hsl(var(--accent) / 0.12)' : 'hsl(var(--muted) / 0.5)',
+              border: autoSync ? '1px solid hsl(var(--accent) / 0.3)' : '1px solid hsl(var(--border))',
+            }}
+            title="Sync: auto git add/commit/push después de cambios"
+          >
+            Sync
           </button>
           <button
             onClick={() => setAgentMode(!agentMode)}

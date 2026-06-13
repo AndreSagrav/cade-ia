@@ -26,6 +26,8 @@ interface ChatState {
   autoApply: boolean;
   /** Automatically execute agent run commands without confirmation */
   autoRun: boolean;
+  /** Automatically sync file changes to GitHub (git add/commit/push) */
+  autoSync: boolean;
 
   // Model
   selectedModel: string;
@@ -56,6 +58,7 @@ interface ChatState {
   setSilentMode: (enabled: boolean) => void;
   setAutoApply: (enabled: boolean) => void;
   setAutoRun: (enabled: boolean) => void;
+  setAutoSync: (enabled: boolean) => void;
   setSelectedModel: (model: string) => void;
   addRecentModel: (model: string) => void;
   incrementModelUsage: (modelId: string, tokens: number) => void;
@@ -85,6 +88,7 @@ export const useChatStore = create<ChatState>()(
       silentMode: true,
       autoApply: true,
       autoRun: false,
+      autoSync: false,
       selectedModel: 'gemini-2.5-flash',
       recentModels: [],
       modelUsage: {},
@@ -270,6 +274,7 @@ export const useChatStore = create<ChatState>()(
       setSilentMode: (enabled) => set({ silentMode: enabled }),
       setAutoApply: (enabled) => set({ autoApply: enabled }),
       setAutoRun: (enabled) => set({ autoRun: enabled }),
+      setAutoSync: (enabled) => set({ autoSync: enabled }),
 
       setSelectedModel: (model) => {
         set({ selectedModel: model });
@@ -296,6 +301,7 @@ export const useChatStore = create<ChatState>()(
         silentMode: state.silentMode,
         autoApply: state.autoApply,
         autoRun: state.autoRun,
+        autoSync: state.autoSync,
       }),
     },
   ),

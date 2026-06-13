@@ -202,6 +202,21 @@ export async function processAgentResponse(content: string): Promise<void> {
       }
     }
   }
+
+  // Auto-sync to GitHub if enabled and there were file changes
+  const hadFileChanges = changes.some((c) => c.type === 'replace');
+  if (hadFileChanges && chat.autoSync && rootPath) {
+    (async () => {
+      const res = await gitSync(rootPath);
+      if (!res.ok) {
+        chat.addMessage({
+          id: Date.now().toString(36), role: 'assistant',
+          content: `⚠️ Sync falló: ${res.message}`,
+          timestamp: Date.now(),
+        });
+      }
+    })();
+  }
 }
 
 /**
@@ -264,3 +279,37 @@ export async function rejectChange(change: PendingChange): Promise<void> {
   store.updateChangeStatus(change.id, 'rejected');
 }
 
+/**
+ * Auto-sync file changes to GitHub via git add/commit/push.
+ * Uses IPC shell.run when available, falls back to HTTP api.runCommand.
+ */
+export async function gitSync(rootPath: string): Promise<{ ok: boolean; message: string }> {
+  const wapi: any = (typeof window !== 'undefined' ? (window as any).api : null);
+  const useIpc = !!(wapi && wapi.shell && wapi.shell.run);
+  const isWin = navigator.platform.startsWith('Win');
+  const shell = isWin ? 'powershell.exe' : 'bash';
+  const gitAddArgs = isWin
+    ? ['-NoProfile', '-NonInteractive', '-Command', 'cd "' + rootPath + '"; git add -A']
+    : ['-c', 'cd "' + rootPath + '" && git add -A'];
+  const gitCommitArgs = isWin
+    ? ['-NoProfile', '-NonInteractive', '-Command', 'cd "' + rootPath + '"; git commit -m "CodeAI auto-sync ' + new Date().toISOString() + '"']
+    : ['-c', 'cd "' + rootPath + '" && git commit -m "CodeAI auto-sync ' + new Date().toISOString() + '"'];
+  const gitPushArgs = isWin
+    ? ['-NoProfile', '-NonInteractive', '-Command', 'cd "' + rootPath + '"; git push']
+    : ['-c', 'cd "' + rootPath + '" && git push'];
+
+  try {
+    if (useIpc) {
+      await wapi.shell.run(shell, gitAddArgs, rootPath, undefined, 15000);
+      await wapi.shell.run(shell, gitCommitArgs, rootPath, undefined, 15000);
+      await wapi.shell.run(shell, gitPushArgs, rootPath, undefined, 30000);
+    } else {
+      await api.runCommand({ cmd: 'git add -A', cwd: rootPath });
+      await api.runCommand({ cmd: `git commit -m "CodeAI auto-sync ${new Date().toISOString()}"`, cwd: rootPath });
+      await api.runCommand({ cmd: 'git push', cwd: rootPath });
+    }
+    return { ok: true, message: 'Sync OK' };
+  } catch (e: any) {
+    return { ok: false, message: e?.message || 'Sync failed' };
+  }
+}
