@@ -64,4 +64,10 @@ contextBridge.exposeInMainWorld('api', {
       return () => ipcRenderer.removeListener('updates:status', handler);
     },
   },
+  browser: {
+    open: (url, width, height) => ipcRenderer.invoke('browser:open', { url, width, height }),
+    screenshot: (id) => ipcRenderer.invoke('browser:screenshot', { id }),
+    evaluate: (id, script) => ipcRenderer.invoke('browser:evaluate', { id, script }),
+    close: (id) => ipcRenderer.invoke('browser:close', { id }),
+  },
 });

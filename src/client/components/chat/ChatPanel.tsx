@@ -801,6 +801,80 @@ function FollowUpChips({ questions }: { questions: string[] }) {
   );
 }
 
+/* ── Browser automation block ── */
+function parseBrowserBlocks(content: string): { prose: string; browsers: { id: number; url: string; action: string }[] } {
+  const browsers: { id: number; url: string; action: string }[] = [];
+  let prose = content;
+  const regex = /<browser\s+url="([^"]+)"(?:\s+action="([^"]*)")?>([\s\S]*?)<\/browser>/gi;
+  let match;
+  let id = 0;
+  while ((match = regex.exec(content)) !== null) {
+    browsers.push({ id: id++, url: match[1], action: match[2] || 'screenshot' });
+  }
+  prose = prose.replace(regex, '').replace(/\n{3,}/g, '\n\n').trim();
+  return { prose, browsers };
+}
+
+function BrowserBlock({ url }: { url: string }) {
+  const [shot, setShot] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function run() {
+    setLoading(true);
+    setError(null);
+    try {
+      const wapi: any = (typeof window !== 'undefined' ? (window as any).api : null);
+      if (!wapi?.browser) {
+        setError('Browser automation no disponible en este modo');
+        setLoading(false);
+        return;
+      }
+      const { id } = await wapi.browser.open(url, 1280, 800);
+      await new Promise((r) => setTimeout(r, 2000)); // let page load
+      const { image, error: shotErr } = await wapi.browser.screenshot(id);
+      await wapi.browser.close(id);
+      if (shotErr) throw new Error(shotErr);
+      setShot(image);
+    } catch (e: any) {
+      setError(e.message || 'Error');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div className="my-2 rounded-lg border overflow-hidden" style={{ borderColor: 'hsl(var(--border))' }}>
+      <div
+        className="flex items-center gap-2 px-3 py-2 text-[11px] font-semibold"
+        style={{ background: 'hsl(var(--muted) / 0.25)', borderBottom: '1px solid hsl(var(--border) / 0.5)' }}
+      >
+        <span style={{ color: '#89b4fa' }}>🌐</span>
+        <span className="truncate" style={{ color: 'hsl(var(--foreground))' }}>{url}</span>
+        {!shot && !loading && (
+          <button onClick={run} className="ml-auto rounded px-2 py-0.5 text-[10px] font-bold transition-colors hover:opacity-80" style={{ background: '#1e1e2e', color: '#a6e3a1' }}>
+            ▶ Capturar
+          </button>
+        )}
+      </div>
+      {loading && (
+        <div className="px-3 py-4 text-[11px] text-muted-foreground">Cargando página y capturando…</div>
+      )}
+      {error && (
+        <div className="px-3 py-2 text-[11px]" style={{ color: '#f38ba8' }}>{error}</div>
+      )}
+      {shot && (
+        <div className="px-2 py-2">
+          <img src={shot} alt={`screenshot ${url}`} className="w-full rounded border" style={{ borderColor: 'hsl(var(--border))' }} />
+          <div className="mt-1 flex gap-2">
+            <button onClick={run} className="text-[10px] text-muted-foreground hover:text-foreground transition-colors">🔄 Re-capturar</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ── Terminal block inline ── */
 function TerminalBlock({ content }: { content: string }) {
   return (
@@ -932,7 +1006,8 @@ function MessageBubble({ message, isLast }: { message: any; isLast: boolean }) {
   const { prose: planProse, plans } = parsePlanBlocks(thinkingProse);
   const { prose: timelineProse, timelines } = parseTimelineBlocks(planProse);
   const { prose: followupProse, followups } = parseFollowUpBlocks(timelineProse);
-  const { prose, fileCount, runCount, files } = parseAgentMessage(followupProse);
+  const { prose: browserProse, browsers } = parseBrowserBlocks(followupProse);
+  const { prose, fileCount, runCount, files } = parseAgentMessage(browserProse);
   const { silentMode } = useChatStore();
   const hasActions = fileCount + runCount > 0;
 
@@ -978,6 +1053,13 @@ function MessageBubble({ message, isLast }: { message: any; isLast: boolean }) {
                 </div>
               )
             )}
+          </div>
+        )}
+        {browsers.length > 0 && (
+          <div className="space-y-1">
+            {browsers.map((b) => (
+              <BrowserBlock key={b.id} url={b.url} />
+            ))}
           </div>
         )}
         {followups.length > 0 && <FollowUpChips questions={followups} />}

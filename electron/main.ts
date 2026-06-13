@@ -242,3 +242,40 @@ ipcMain.handle('files:write', async (_e, { path, content, root }: { path: string
   writeFileSync(full, content, 'utf-8');
   return { ok: true, path };
 });
+
+/* ── Browser automation (Electron Chromium) ────────────────────────── */
+const browserWindows = new Map<string, BrowserWindow>();
+
+ipcMain.handle('browser:open', async (_e, { url, width = 1280, height = 800 }: { url: string; width?: number; height?: number }) => {
+  const id = crypto.randomBytes(6).toString('hex');
+  const win = new BrowserWindow({
+    width,
+    height,
+    show: false,
+    webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true },
+  });
+  await win.loadURL(url);
+  browserWindows.set(id, win);
+  return { id, url };
+});
+
+ipcMain.handle('browser:screenshot', async (_e, { id }: { id: string }) => {
+  const win = browserWindows.get(id);
+  if (!win) return { error: 'Browser not found' };
+  const image = await win.capturePage();
+  const dataUrl = image.toDataURL();
+  return { image: dataUrl };
+});
+
+ipcMain.handle('browser:evaluate', async (_e, { id, script }: { id: string; script: string }) => {
+  const win = browserWindows.get(id);
+  if (!win) return { error: 'Browser not found' };
+  const result = await win.webContents.executeJavaScript(script);
+  return { result: String(result) };
+});
+
+ipcMain.handle('browser:close', async (_e, { id }: { id: string }) => {
+  const win = browserWindows.get(id);
+  if (win) { win.destroy(); browserWindows.delete(id); }
+  return { ok: true };
+});
