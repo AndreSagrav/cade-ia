@@ -513,6 +513,13 @@ async function streamAgentChat() {
             content: finalContent,
             timestamp: Date.now(), model: actualModelId,
             agentChanges: agentChanges.length > 0 ? agentChanges : undefined,
+            toolCalls: toolCalls.length > 0 ? toolCalls.map((tc) => ({
+                id: tc.id,
+                name: tc.name,
+                args: tc.args,
+                status: tc.status,
+                result: tc.result,
+            })) : undefined,
         });
         const promptTokens = Math.ceil((system.length + JSON.stringify(historyMessages).length) / 4);
         const completionTokens = Math.ceil(finalContent.length / 4);

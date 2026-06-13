@@ -1,6 +1,6 @@
 import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { Send, Bot, Sparkles, Plus, X, History, MessageSquare, Trash2, Mic, GitBranch, Undo2, Loader2, VolumeX, Check, CloudUpload, Play, MoreVertical } from 'lucide-react';
+import { Send, Bot, Sparkles, Plus, X, History, MessageSquare, Trash2, Mic, GitBranch, Undo2, Loader2, VolumeX, Check, CloudUpload, Play, MoreVertical, Brain, ChevronDown, ChevronRight } from 'lucide-react';
 import { ModelSelector } from './ModelSelector';
 import { useChatStore } from '@/store/chat-store';
 import { AI_MODELS } from '@shared/models';
@@ -174,6 +174,46 @@ function parseAgentMessage(content) {
     prose = prose.replace(/\n{3,}/g, '\n\n').trim();
     return { prose, fileCount: files.length, runCount, files };
 }
+/* ── Tool call card ── */
+function ToolCallCard({ call }) {
+    const iconMap = {
+        read_file: { icon: '📖', color: '#89b4fa' },
+        write_file: { icon: '✏️', color: '#a6e3a1' },
+        list_files: { icon: '📁', color: '#f9e2af' },
+        search_files: { icon: '🔍', color: '#cba6f7' },
+        run_command: { icon: '⚡', color: '#fab387' },
+        git_status: { icon: '🌿', color: '#a6e3a1' },
+        git_commit_push: { icon: '🚀', color: '#89b4fa' },
+    };
+    const meta = iconMap[call.name] || { icon: '⚙️', color: '#6c7086' };
+    const isDone = call.status === 'done';
+    const args = call.args ? JSON.stringify(call.args).slice(0, 120) : '';
+    return (_jsxs("div", { className: "my-2 rounded-lg border overflow-hidden", style: {
+            borderColor: isDone ? `${meta.color}40` : 'hsl(var(--border))',
+            background: `${meta.color}08`,
+        }, children: [_jsxs("div", { className: "flex items-center gap-2 px-3 py-2", children: [_jsx("span", { className: "text-[13px]", children: meta.icon }), _jsx("span", { className: "text-[12px] font-semibold", style: { color: meta.color }, children: call.name }), _jsx("span", { className: "ml-auto flex h-4 w-4 items-center justify-center rounded-full text-[9px] font-bold", style: {
+                            background: isDone ? `${meta.color}25` : 'hsl(var(--warning) / 0.2)',
+                            color: isDone ? meta.color : 'hsl(var(--warning))',
+                        }, children: isDone ? '✓' : '⋯' })] }), args && (_jsx("div", { className: "px-3 pb-2", children: _jsx("code", { className: "block rounded bg-muted/40 px-2 py-1 text-[10px] font-mono text-muted-foreground truncate", children: args }) })), isDone && call.result && (_jsx("div", { className: "border-t px-3 py-2 text-[11px] text-muted-foreground", style: { borderColor: 'hsl(var(--border) / 0.5)' }, children: _jsx("pre", { className: "whitespace-pre-wrap break-words font-mono text-[10px]", style: { maxHeight: '120px', overflow: 'auto' }, children: typeof call.result === 'string' ? call.result.slice(0, 300) : JSON.stringify(call.result, null, 2).slice(0, 300) }) }))] }));
+}
+/* ── Parse thinking blocks from content ── */
+function parseThinkingBlocks(content) {
+    const thinkings = [];
+    let prose = content;
+    const regex = /<thinking>([\s\S]*?)<\/thinking>/gi;
+    let match;
+    let id = 0;
+    while ((match = regex.exec(content)) !== null) {
+        thinkings.push({ id: id++, content: match[1].trim() });
+    }
+    prose = prose.replace(regex, '').replace(/\n{3,}/g, '\n\n').trim();
+    return { prose, thinkings };
+}
+/* ── Thinking block (collapsible) ── */
+function ThinkingBlock({ content }) {
+    const [open, setOpen] = useState(false);
+    return (_jsxs("div", { className: "my-3 rounded-lg border overflow-hidden", style: { borderColor: 'hsl(var(--border))', background: 'hsl(var(--muted) / 0.25)' }, children: [_jsxs("button", { onClick: () => setOpen(!open), className: "flex w-full items-center gap-2 px-3 py-2 text-[11px] font-semibold transition-colors hover:bg-muted/30", style: { color: 'hsl(var(--muted-foreground))' }, children: [_jsx(Brain, { size: 13, style: { color: 'hsl(var(--accent))' } }), _jsx("span", { className: "flex-1 text-left", children: "Pensamiento" }), open ? _jsx(ChevronDown, { size: 13 }) : _jsx(ChevronRight, { size: 13 })] }), open && (_jsx("div", { className: "px-3 pb-3 text-[12px] leading-relaxed whitespace-pre-wrap", style: { color: 'hsl(var(--muted-foreground))' }, children: content }))] }));
+}
 /* ── Message bubble ── */
 function MessageBubble({ message, isLast }) {
     const isUser = message.role === 'user';
@@ -191,10 +231,11 @@ function MessageBubble({ message, isLast }) {
                             color: 'hsl(var(--foreground))',
                         }, children: [_jsx("div", { className: "whitespace-pre-wrap", children: message.content }), message.attachments?.map((att) => (_jsx("div", { className: "mt-2 rounded-md overflow-hidden border border-[#333]", children: _jsx("img", { src: att.content, alt: att.name, className: "max-w-full h-auto max-h-[300px]" }) }, att.id)))] })] }) }));
     }
-    const { prose, fileCount, runCount, files } = parseAgentMessage(message.content || '');
+    const { prose: rawProse, thinkings } = parseThinkingBlocks(message.content || '');
+    const { prose, fileCount, runCount, files } = parseAgentMessage(rawProse);
     const { silentMode } = useChatStore();
     const hasActions = fileCount + runCount > 0;
-    return (_jsxs("div", { className: cn('flex gap-3', isLast && 'animate-fade-in'), children: [_jsx(AvatarAI, {}), _jsxs("div", { className: "flex-1 min-w-0 pt-0.5", children: [_jsx("div", { className: "text-[11px] font-semibold mb-2", style: { color: 'hsl(var(--muted-foreground))' }, children: AI_MODELS[message.model ?? '']?.label ?? 'IA' }), prose && (_jsx("div", { className: "text-[13px] leading-relaxed whitespace-pre-wrap", style: { color: 'hsl(var(--foreground))' }, children: prose })), !silentMode && hasActions && (_jsxs("div", { className: "mt-2 rounded-lg border px-3 py-2 text-[12px]", style: {
+    return (_jsxs("div", { className: cn('flex gap-3', isLast && 'animate-fade-in'), children: [_jsx(AvatarAI, {}), _jsxs("div", { className: "flex-1 min-w-0 pt-0.5", children: [_jsx("div", { className: "text-[11px] font-semibold mb-2", style: { color: 'hsl(var(--muted-foreground))' }, children: AI_MODELS[message.model ?? '']?.label ?? 'IA' }), thinkings.length > 0 && (_jsx("div", { className: "space-y-1", children: thinkings.map((t) => (_jsx(ThinkingBlock, { content: t.content }, t.id))) })), prose && (_jsx("div", { className: "text-[13px] leading-relaxed whitespace-pre-wrap", style: { color: 'hsl(var(--foreground))' }, children: prose })), message.toolCalls && message.toolCalls.length > 0 && (_jsx("div", { className: "mt-1", children: message.toolCalls.map((tc) => (_jsx(ToolCallCard, { call: tc }, tc.id))) })), !silentMode && hasActions && !message.toolCalls && (_jsxs("div", { className: "mt-2 rounded-lg border px-3 py-2 text-[12px]", style: {
                             background: 'hsl(48 96% 53% / 0.08)',
                             borderColor: 'hsl(48 96% 53% / 0.3)',
                             color: 'hsl(48 96% 53%)',

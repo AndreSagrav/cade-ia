@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { Send, Bot, Sparkles, Plus, X, History, MessageSquare, Trash2, Mic, GitBranch, Undo2, Loader2, VolumeX, Check, CloudUpload, Play, MoreVertical } from 'lucide-react';
+import { Send, Bot, Sparkles, Plus, X, History, MessageSquare, Trash2, Mic, GitBranch, Undo2, Loader2, VolumeX, Check, CloudUpload, Play, MoreVertical, Brain, ChevronDown, ChevronRight } from 'lucide-react';
 import { ModelSelector } from './ModelSelector';
 import { useChatStore } from '@/store/chat-store';
 import { AI_MODELS } from '@shared/models';
@@ -523,6 +523,102 @@ function parseAgentMessage(content: string): { prose: string; fileCount: number;
   return { prose, fileCount: files.length, runCount, files };
 }
 
+/* ── Tool call card ── */
+function ToolCallCard({ call }: { call: any }) {
+  const iconMap: Record<string, any> = {
+    read_file: { icon: '📖', color: '#89b4fa' },
+    write_file: { icon: '✏️', color: '#a6e3a1' },
+    list_files: { icon: '📁', color: '#f9e2af' },
+    search_files: { icon: '🔍', color: '#cba6f7' },
+    run_command: { icon: '⚡', color: '#fab387' },
+    git_status: { icon: '🌿', color: '#a6e3a1' },
+    git_commit_push: { icon: '🚀', color: '#89b4fa' },
+  };
+  const meta = iconMap[call.name] || { icon: '⚙️', color: '#6c7086' };
+  const isDone = call.status === 'done';
+  const args = call.args ? JSON.stringify(call.args).slice(0, 120) : '';
+
+  return (
+    <div
+      className="my-2 rounded-lg border overflow-hidden"
+      style={{
+        borderColor: isDone ? `${meta.color}40` : 'hsl(var(--border))',
+        background: `${meta.color}08`,
+      }}
+    >
+      <div className="flex items-center gap-2 px-3 py-2">
+        <span className="text-[13px]">{meta.icon}</span>
+        <span className="text-[12px] font-semibold" style={{ color: meta.color }}>
+          {call.name}
+        </span>
+        <span
+          className="ml-auto flex h-4 w-4 items-center justify-center rounded-full text-[9px] font-bold"
+          style={{
+            background: isDone ? `${meta.color}25` : 'hsl(var(--warning) / 0.2)',
+            color: isDone ? meta.color : 'hsl(var(--warning))',
+          }}
+        >
+          {isDone ? '✓' : '⋯'}
+        </span>
+      </div>
+      {args && (
+        <div className="px-3 pb-2">
+          <code className="block rounded bg-muted/40 px-2 py-1 text-[10px] font-mono text-muted-foreground truncate">
+            {args}
+          </code>
+        </div>
+      )}
+      {isDone && call.result && (
+        <div className="border-t px-3 py-2 text-[11px] text-muted-foreground" style={{ borderColor: 'hsl(var(--border) / 0.5)' }}>
+          <pre className="whitespace-pre-wrap break-words font-mono text-[10px]" style={{ maxHeight: '120px', overflow: 'auto' }}>
+            {typeof call.result === 'string' ? call.result.slice(0, 300) : JSON.stringify(call.result, null, 2).slice(0, 300)}
+          </pre>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ── Parse thinking blocks from content ── */
+function parseThinkingBlocks(content: string): { prose: string; thinkings: { id: number; content: string }[] } {
+  const thinkings: { id: number; content: string }[] = [];
+  let prose = content;
+  const regex = /<thinking>([\s\S]*?)<\/thinking>/gi;
+  let match;
+  let id = 0;
+  while ((match = regex.exec(content)) !== null) {
+    thinkings.push({ id: id++, content: match[1].trim() });
+  }
+  prose = prose.replace(regex, '').replace(/\n{3,}/g, '\n\n').trim();
+  return { prose, thinkings };
+}
+
+/* ── Thinking block (collapsible) ── */
+function ThinkingBlock({ content }: { content: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div
+      className="my-3 rounded-lg border overflow-hidden"
+      style={{ borderColor: 'hsl(var(--border))', background: 'hsl(var(--muted) / 0.25)' }}
+    >
+      <button
+        onClick={() => setOpen(!open)}
+        className="flex w-full items-center gap-2 px-3 py-2 text-[11px] font-semibold transition-colors hover:bg-muted/30"
+        style={{ color: 'hsl(var(--muted-foreground))' }}
+      >
+        <Brain size={13} style={{ color: 'hsl(var(--accent))' }} />
+        <span className="flex-1 text-left">Pensamiento</span>
+        {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+      </button>
+      {open && (
+        <div className="px-3 pb-3 text-[12px] leading-relaxed whitespace-pre-wrap" style={{ color: 'hsl(var(--muted-foreground))' }}>
+          {content}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ── Message bubble ── */
 function MessageBubble({ message, isLast }: { message: any; isLast: boolean }) {
   const isUser = message.role === 'user';
@@ -567,7 +663,8 @@ function MessageBubble({ message, isLast }: { message: any; isLast: boolean }) {
     );
   }
 
-  const { prose, fileCount, runCount, files } = parseAgentMessage(message.content || '');
+  const { prose: rawProse, thinkings } = parseThinkingBlocks(message.content || '');
+  const { prose, fileCount, runCount, files } = parseAgentMessage(rawProse);
   const { silentMode } = useChatStore();
   const hasActions = fileCount + runCount > 0;
 
@@ -578,6 +675,13 @@ function MessageBubble({ message, isLast }: { message: any; isLast: boolean }) {
         <div className="text-[11px] font-semibold mb-2" style={{ color: 'hsl(var(--muted-foreground))' }}>
           {AI_MODELS[message.model ?? '']?.label ?? 'IA'}
         </div>
+        {thinkings.length > 0 && (
+          <div className="space-y-1">
+            {thinkings.map((t) => (
+              <ThinkingBlock key={t.id} content={t.content} />
+            ))}
+          </div>
+        )}
         {prose && (
           <div
             className="text-[13px] leading-relaxed whitespace-pre-wrap"
@@ -586,7 +690,14 @@ function MessageBubble({ message, isLast }: { message: any; isLast: boolean }) {
             {prose}
           </div>
         )}
-        {!silentMode && hasActions && (
+        {message.toolCalls && message.toolCalls.length > 0 && (
+          <div className="mt-1">
+            {message.toolCalls.map((tc: any) => (
+              <ToolCallCard key={tc.id} call={tc} />
+            ))}
+          </div>
+        )}
+        {!silentMode && hasActions && !message.toolCalls && (
           <div
             className="mt-2 rounded-lg border px-3 py-2 text-[12px]"
             style={{

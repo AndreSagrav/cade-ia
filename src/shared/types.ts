@@ -26,6 +26,7 @@ export interface ChatMessage {
   tokens?: { input: number; output: number };
   attachments?: Attachment[];
   agentChanges?: { path: string; oldContent: string; newContent: string }[];
+  toolCalls?: { id: string; name: string; args: any; status: string; result?: any }[];
 }
 
 export interface Attachment {
