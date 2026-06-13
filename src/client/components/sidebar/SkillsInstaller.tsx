@@ -31,28 +31,49 @@ export function SkillsInstaller() {
     setUrls('');
     setInstalling(true);
 
-    const destFolder = rootPath.replace(/\\/g, '/') + '/skills';
+    const destFolder = (rootPath.endsWith('\\') || rootPath.endsWith('/'))
+      ? rootPath + 'skills'
+      : rootPath + (rootPath.includes('\\') ? '\\skills' : '/skills');
 
     for (let i = 0; i < newJobs.length; i++) {
       setJobs((prev) => prev.map((j, idx) => (idx === i ? { ...j, status: 'installing' } : j)));
       
       const repoName = newJobs[i].url.split('/').pop()?.replace('.git', '') || `app-${Date.now()}`;
-      const destination = `${destFolder}/${repoName}`;
+      const destination = (destFolder.includes('\\') ? `${destFolder}\\${repoName}` : `${destFolder}/${repoName}`);
 
       // Use original URL, rely on local git credentials
       let finalUrl = newJobs[i].url;
 
       try {
-        const res = await fetch('/api/git/clone', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ url: finalUrl, destination }),
-        }).then((r) => r.json());
-
-        if (res.ok) {
-          setJobs((prev) => prev.map((j, idx) => (idx === i ? { ...j, status: 'success' } : j)));
+        const wapi: any = (typeof window !== 'undefined' ? (window as any).api : null);
+        const useIpc = !!(wapi && wapi.shell && wapi.shell.run);
+        if (useIpc) {
+          try {
+            // Ensure skills folder exists using PowerShell on Windows; cross-platform fallback is mkdir -p via shell
+            if (navigator.platform.startsWith('Win')) {
+              await wapi.shell.run('powershell.exe', ['-NoProfile','-NonInteractive','-Command', `New-Item -ItemType Directory -Force -Path \"${destFolder}\" | Out-Null`], rootPath);
+            } else {
+              await wapi.shell.run('mkdir', ['-p', destFolder], rootPath);
+            }
+          } catch {}
+          const result = await wapi.shell.run('git', ['clone', finalUrl, destination], rootPath, undefined, 180000);
+          if (result && result.code === 0) {
+            setJobs((prev) => prev.map((j, idx) => (idx === i ? { ...j, status: 'success' } : j)));
+          } else {
+            const err = (result?.stderr || result?.stdout || 'Fallo al clonar').toString().slice(0, 500);
+            setJobs((prev) => prev.map((j, idx) => (idx === i ? { ...j, status: 'error', error: err } : j)));
+          }
         } else {
-          setJobs((prev) => prev.map((j, idx) => (idx === i ? { ...j, status: 'error', error: res.error } : j)));
+          const res = await fetch('/api/git/clone', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url: finalUrl, destination }),
+          }).then((r) => r.json());
+          if (res.ok) {
+            setJobs((prev) => prev.map((j, idx) => (idx === i ? { ...j, status: 'success' } : j)));
+          } else {
+            setJobs((prev) => prev.map((j, idx) => (idx === i ? { ...j, status: 'error', error: res.error } : j)));
+          }
         }
       } catch (e: any) {
         setJobs((prev) => prev.map((j, idx) => (idx === i ? { ...j, status: 'error', error: e.message } : j)));

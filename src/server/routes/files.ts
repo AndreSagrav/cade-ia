@@ -1,7 +1,8 @@
 import { Router, Request, Response } from 'express';
-import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSync } from 'fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSync, realpathSync, lstatSync } from 'fs';
 import { execSync } from 'child_process';
-import { join, resolve, dirname, relative } from 'path';
+import { join, resolve, dirname, relative, isAbsolute } from 'path';
+import { z } from 'zod';
 
 export const filesRouter = Router();
 
@@ -10,17 +11,39 @@ const SKIP_DIRS = new Set([
   '__pycache__', '.venv', '.svelte-kit', '.nuxt',
 ]);
 
-// Validate path doesn't escape the root
+// Validate path doesn't escape the root and isn't a symlink outside
 function validatePath(root: string, filePath: string): string | null {
-  const resolved = resolve(root, filePath);
-  const normalizedRoot = resolve(root);
-  if (!resolved.startsWith(normalizedRoot)) return null;
-  return resolved;
+  try {
+    const normalizedRoot = realpathSync(resolve(root)).replace(/\\/g, '/');
+    const abs = resolve(root, filePath);
+    const absNorm = abs.replace(/\\/g, '/');
+    if (!absNorm.startsWith(normalizedRoot)) return null;
+    // Ensure the real base (existing file or parent dir) is inside root (blocks symlink escapes)
+    const basePath = existsSync(abs) ? abs : dirname(abs);
+    const realBase = realpathSync(basePath).replace(/\\/g, '/');
+    if (!realBase.startsWith(normalizedRoot)) return null;
+    // If file exists and is a symlink, ensure its target remains inside root
+    if (existsSync(abs)) {
+      try {
+        const st = lstatSync(abs);
+        if (st.isSymbolicLink()) {
+          const target = realpathSync(abs).replace(/\\/g, '/');
+          if (!target.startsWith(normalizedRoot)) return null;
+        }
+      } catch {}
+    }
+    return abs;
+  } catch {
+    return null;
+  }
 }
 
 // Write file
 filesRouter.post('/write', (req: Request, res: Response) => {
-  const { path: filePath, content, root } = req.body;
+  const schema = z.object({ path: z.string().min(1).max(500), content: z.string(), root: z.string().min(1) });
+  const parsed = schema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'Invalid body' });
+  const { path: filePath, content, root } = parsed.data;
   if (!filePath || content === undefined || !root) {
     return res.status(400).json({ error: 'Missing path, content, or root' });
   }
@@ -43,7 +66,10 @@ filesRouter.post('/write', (req: Request, res: Response) => {
 
 // Read file
 filesRouter.post('/read', (req: Request, res: Response) => {
-  const { path: filePath, root } = req.body;
+  const schema = z.object({ path: z.string().min(1).max(500), root: z.string().min(1) });
+  const parsed = schema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'Invalid body' });
+  const { path: filePath, root } = parsed.data;
   if (!filePath || !root) {
     return res.status(400).json({ error: 'Missing path or root' });
   }
@@ -67,13 +93,49 @@ filesRouter.post('/read', (req: Request, res: Response) => {
 
 // File tree
 filesRouter.post('/tree', (req: Request, res: Response) => {
-  const { root, maxDepth = 5 } = req.body;
+  const schema = z.object({ root: z.string().min(1), maxDepth: z.number().int().min(1).max(8).optional() });
+  const parsed = schema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'Invalid body' });
+  const { root, maxDepth = 5 } = parsed.data as { root: string; maxDepth?: number };
   if (!root) {
     return res.status(400).json({ error: 'Missing root' });
   }
 
   try {
-    const items = buildTree(root, 0, maxDepth);
+    let realRoot: string | null = null;
+    if (isAbsolute(root)) {
+      if (!existsSync(root)) {
+        return res.status(404).json({ error: 'Directory not found', provided: root });
+      }
+      realRoot = realpathSync(root);
+    } else {
+      const home = process.env.USERPROFILE ?? process.env.HOME ?? '';
+      const candidates = [
+        resolve(process.cwd(), root),
+        resolve(home, 'Documents', root),
+        resolve(home, 'Projects', root),
+        resolve(home, 'Documents', 'PROYECTOS', root),
+        resolve(home, 'Documentos', root),
+        resolve(home, 'OneDrive', 'Documents', root),
+        resolve(home, 'OneDrive', 'Documentos', root),
+        resolve(home, 'OneDrive', 'Documentos', 'PROYECTOS', root),
+        resolve(home, 'OneDrive', 'Documents', 'PROYECTOS', root),
+        resolve(home, 'Desktop', root),
+        resolve(home, 'Escritorio', root),
+      ];
+      for (const cand of candidates) {
+        if (existsSync(cand)) {
+          try {
+            const st = statSync(cand);
+            if (st.isDirectory()) { realRoot = realpathSync(cand); break; }
+          } catch {}
+        }
+      }
+      if (!realRoot) {
+        return res.status(404).json({ error: 'Directory not found or not absolute', provided: root });
+      }
+    }
+    const items = buildTree(realRoot, 0, Math.min(8, maxDepth), realRoot);
     res.json({ ok: true, items, root });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Tree failed';
@@ -83,20 +145,44 @@ filesRouter.post('/tree', (req: Request, res: Response) => {
 
 // Resolve folder path
 filesRouter.post('/resolve', (req: Request, res: Response) => {
-  const { name } = req.body;
+  const schema = z.object({ name: z.string().min(1).max(260) });
+  const parsed = schema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'Invalid body' });
+  const { name } = parsed.data;
   if (!name) return res.status(400).json({ error: 'Missing name' });
+  
+  // If it's an absolute path and exists, accept it directly
+  try {
+    if (isAbsolute(name) && existsSync(name)) {
+      const st = statSync(name);
+      if (st.isDirectory()) {
+        return res.json({ path: realpathSync(name) });
+      }
+    }
+  } catch {}
 
   // Try common locations
+  const home = process.env.USERPROFILE ?? process.env.HOME ?? '';
   const candidates = [
     resolve(process.cwd(), name),
-    resolve(process.env.HOME ?? process.env.USERPROFILE ?? '', 'Documents', name),
-    resolve(process.env.HOME ?? process.env.USERPROFILE ?? '', 'Projects', name),
-    resolve(process.env.HOME ?? process.env.USERPROFILE ?? '', 'Documents', 'PROYECTOS', name),
+    resolve(home, 'Documents', name),
+    resolve(home, 'Projects', name),
+    resolve(home, 'Documents', 'PROYECTOS', name),
+    resolve(home, 'Documentos', name),
+    resolve(home, 'OneDrive', 'Documents', name),
+    resolve(home, 'OneDrive', 'Documentos', name),
+    resolve(home, 'OneDrive', 'Documentos', 'PROYECTOS', name),
+    resolve(home, 'OneDrive', 'Documents', 'PROYECTOS', name),
+    resolve(home, 'Desktop', name),
+    resolve(home, 'Escritorio', name),
   ];
 
   for (const candidate of candidates) {
     if (existsSync(candidate)) {
-      return res.json({ path: candidate });
+      try {
+        const st = statSync(candidate);
+        if (st.isDirectory()) return res.json({ path: realpathSync(candidate) });
+      } catch {}
     }
   }
 
@@ -105,7 +191,10 @@ filesRouter.post('/resolve', (req: Request, res: Response) => {
 
 // List directories for folder picker
 filesRouter.post('/list-directories', (req: Request, res: Response) => {
-  const { path: dirPath } = req.body;
+  const schema = z.object({ path: z.string().min(1).max(500).optional() });
+  const parsed = schema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'Invalid body' });
+  const { path: dirPath } = parsed.data as { path?: string };
 
   try {
     if (!dirPath) {
@@ -157,7 +246,7 @@ filesRouter.post('/list-directories', (req: Request, res: Response) => {
   }
 });
 
-function buildTree(dir: string, depth: number, maxDepth: number): object[] {
+function buildTree(dir: string, depth: number, maxDepth: number, root: string): object[] {
   if (depth >= maxDepth) return [];
   if (!existsSync(dir)) return [];
 
@@ -175,10 +264,10 @@ function buildTree(dir: string, depth: number, maxDepth: number): object[] {
     if (SKIP_DIRS.has(entry.name)) continue;
 
     const entryPath = join(dir, entry.name);
-    const relativePath = relative(dir, entryPath);
+    const relativePath = relative(root, entryPath);
 
     if (entry.isDirectory()) {
-      const children = buildTree(entryPath, depth + 1, maxDepth);
+      const children = buildTree(entryPath, depth + 1, maxDepth, root);
       items.push({ name: entry.name, path: relativePath, kind: 'directory', children });
     } else {
       try {

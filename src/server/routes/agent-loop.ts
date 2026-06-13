@@ -4,6 +4,7 @@ import { execSync, spawn, ChildProcess } from 'child_process';
 import { join, resolve, dirname } from 'path';
 import { config } from '../config';
 import type { AIProvider } from '@shared/types';
+import { getUserApiKeys } from '../lib/supabase';
 
 export const agentRouter = Router();
 
@@ -150,12 +151,38 @@ async function executeTool(
       case 'read_file': {
         const p = safePath(projectRoot, args.path as string);
         if (!p) return { result: 'Error: ruta no permitida (path traversal)' };
-        if (!existsSync(p)) return { result: `Error: archivo no encontrado: ${args.path}` };
-        const content = readFileSync(p, 'utf-8');
+
+        const cacheKey = p;
+        const cached = (global as any).__codeai_read_cache__ as Map<string, string> | undefined;
+        if (cached?.has(cacheKey)) {
+          return { result: cached.get(cacheKey)! };
+        }
+
+        // 1. Revisa primero los archivos abiertos en memoria (IDE frontend)
+        const openFiles = (global as any).__codeai_open_files__ || [];
+        const targetPath = (args.path as string).replace(/\\/g, '/');
+        const openFile = openFiles.find((f: any) => {
+          const fp = f.path.replace(/\\/g, '/');
+          return fp === targetPath || fp.endsWith('/' + targetPath);
+        });
+
+        let content: string;
+        if (openFile) {
+          content = openFile.content;
+        } else {
+          // 2. Si no está en memoria, lee del disco
+          if (!existsSync(p)) return { result: `Error: archivo no encontrado: ${args.path}` };
+          content = readFileSync(p, 'utf-8');
+        }
+
         // Cap at 60k chars to avoid token overflow
         if (content.length > 60000) {
-          return { result: content.slice(0, 60000) + '\n\n... (truncado, archivo muy grande)' };
+          content = content.slice(0, 60000) + '\n\n... (truncado, archivo muy grande)';
         }
+
+        // Cache the result
+        if (cached) cached.set(cacheKey, content);
+
         return { result: content };
       }
 
@@ -620,17 +647,67 @@ function getAdapter(provider: AIProvider): ProviderAdapter {
   }
 }
 
-function resolveApiKey(provider: AIProvider, clientKey?: string): string {
-  if (clientKey) return clientKey;
-  switch (provider) {
-    case 'claude': return config.anthropicApiKey;
-    case 'openai': return config.openaiApiKey;
-    case 'deepseek': return config.deepseekApiKey;
-    case 'nvidia': return config.nvidiaApiKey;
-    case 'openrouter': return config.openrouterApiKey;
-    case 'gemini': return config.geminiApiKey;
-    default: return '';
-  }
+function getFallbackModels(provider: AIProvider, currentModel: string): string[] {
+  const fallbacks: Record<AIProvider, Record<string, string[]>> = {
+    claude: {
+      'claude-sonnet-4-20250514': ['claude-3-5-sonnet-20241022', 'claude-3-haiku-20240307'],
+      'claude-3-5-sonnet-20241022': ['claude-3-haiku-20240307'],
+      'claude-3-haiku-20240307': [],
+    },
+    openai: {
+      'gpt-4o': ['gpt-4o-mini', 'gpt-3.5-turbo'],
+      'gpt-4o-mini': ['gpt-3.5-turbo'],
+      'gpt-3.5-turbo': [],
+    },
+    deepseek: {
+      'deepseek-chat': ['deepseek-coder'],
+      'deepseek-coder': [],
+    },
+    nvidia: {
+      'meta/llama-3.1-405b-instruct': ['meta/llama-3.1-70b-instruct', 'meta/llama-3.1-8b-instruct'],
+      'meta/llama-3.1-70b-instruct': ['meta/llama-3.1-8b-instruct'],
+      'meta/llama-3.1-8b-instruct': [],
+    },
+    openrouter: {
+      'anthropic/claude-sonnet-4': ['anthropic/claude-3-haiku', 'openai/gpt-4o-mini'],
+      'anthropic/claude-3-haiku': ['openai/gpt-4o-mini'],
+      'openai/gpt-4o-mini': [],
+    },
+    gemini: {
+      'gemini-2.0-flash-exp': ['gemini-1.5-flash', 'gemini-1.5-pro'],
+      'gemini-1.5-flash': ['gemini-1.5-pro'],
+      'gemini-1.5-pro': [],
+    },
+  };
+  return fallbacks[provider]?.[currentModel] || [];
+}
+
+async function resolveApiKey(provider: AIProvider, req: Request, clientKey?: string): Promise<string> {
+  if (clientKey && clientKey.trim()) return clientKey;
+  // 1) Server env fallback
+  const envKey = (
+    provider === 'claude' ? config.anthropicApiKey :
+    provider === 'openai' ? config.openaiApiKey :
+    provider === 'deepseek' ? config.deepseekApiKey :
+    provider === 'nvidia' ? config.nvidiaApiKey :
+    provider === 'openrouter' ? config.openrouterApiKey :
+    provider === 'gemini' ? config.geminiApiKey : ''
+  );
+  if (envKey) return envKey;
+
+  // 2) Supabase per-user fallback (requires SUPABASE_URL + SERVICE_ROLE key and x-auth-user)
+  const username = (req.headers['x-auth-user'] as string) || '';
+  if (!username) return '';
+  const map = await getUserApiKeys(username);
+  const byProvider: Record<string, string | undefined> = {
+    claude: map.claude,
+    openai: map.openai,
+    gemini: map.gemini,
+    deepseek: map.deepseek,
+    nvidia: map.nvidia,
+    openrouter: map.openrouter,
+  };
+  return (byProvider[provider] || '') as string;
 }
 
 // ═══════════════════════════════════════
@@ -638,10 +715,11 @@ function resolveApiKey(provider: AIProvider, clientKey?: string): string {
 // ═══════════════════════════════════════
 
 agentRouter.post('/', async (req: Request, res: Response) => {
-  const { messages, model, provider, system, projectRoot, maxIterations = 1000, githubToken } = req.body;
+  const { messages, model, provider, system, projectRoot, maxIterations = 1000, githubToken, openFiles } = req.body;
 
-  // Store GitHub token for git tools
+  // Store GitHub token and open files for tools
   if (githubToken) (global as any).__codeai_github_token__ = githubToken;
+  if (openFiles) (global as any).__codeai_open_files__ = openFiles;
 
   if (!messages || !model || !provider || !projectRoot) {
     return res.status(400).json({ error: 'Missing required fields: messages, model, provider, projectRoot' });
@@ -652,7 +730,7 @@ agentRouter.post('/', async (req: Request, res: Response) => {
     || (req.headers['authorization'] as string)?.replace('Bearer ', '')
     || req.body.apiKey
     || '';
-  const apiKey = resolveApiKey(provider, clientKey || undefined);
+  const apiKey = await resolveApiKey(provider, req, clientKey || undefined);
   if (!apiKey) {
     return res.status(401).json({ error: `No API key configured for provider: ${provider}` });
   }
@@ -670,60 +748,193 @@ agentRouter.post('/', async (req: Request, res: Response) => {
   const adapter = getAdapter(provider);
   let conversationMessages = [...messages];
   let iteration = 0;
+  const readCache = new Map<string, string>();
+  (global as any).__codeai_read_cache__ = readCache;
+  let currentModel = model;
+  let fallbackIndex = 0;
+  const fallbackModels = getFallbackModels(provider, model);
 
   try {
     while (iteration < maxIterations) {
       iteration++;
 
-      // Call the AI provider (non-streaming to get full response with tool calls)
-      const body = adapter.buildBody(model, conversationMessages, system || '');
-      const endpoint = adapter.getEndpoint(model);
+      // Build base body without stream property
+      const baseBody = adapter.buildBody(currentModel, conversationMessages, system || '');
+      // Gemini's stream endpoint does not want {stream: true} in the body.
+      const body = provider === 'gemini' ? baseBody : { ...baseBody, stream: true };
+      const endpoint = adapter.getEndpoint(currentModel);
       const headers = adapter.getHeaders(apiKey);
 
-      // For Gemini, add apiKey as query param
-      const url = provider === 'gemini' ? `${endpoint}?key=${apiKey}` : endpoint;
+      // For Gemini, use streamGenerateContent instead of generateContent
+      const url = provider === 'gemini'
+        ? `${endpoint.replace('generateContent', 'streamGenerateContent')}?key=${apiKey}&alt=sse`
+        : endpoint;
       const fetchHeaders = provider === 'gemini'
         ? { 'Content-Type': 'application/json' }
         : headers;
 
       sendEvent('status', { type: 'thinking', iteration });
 
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: fetchHeaders,
-        body: JSON.stringify(body),
-      });
-
-      if (!response.ok) {
-        const errText = await response.text();
-        sendEvent('error', { message: `API error ${response.status}: ${errText.slice(0, 300)}` });
+      let fetchResponse: globalThis.Response | null = null;
+      let lastError = '';
+      let tries = 0;
+      const maxTries = 5;
+      while (tries < maxTries) {
+        fetchResponse = await fetch(url, {
+          method: 'POST',
+          headers: fetchHeaders,
+          body: JSON.stringify(body),
+        });
+        if (fetchResponse.ok) break;
+        lastError = await fetchResponse.text();
+        if (fetchResponse.status === 429 || fetchResponse.status >= 500) {
+          tries++;
+          if (tries < maxTries) {
+            const backoff = 1000 * Math.pow(2, tries - 1) + Math.floor(Math.random() * 500);
+            sendEvent('status', { type: 'retrying', iteration, message: `Rate limit (${fetchResponse.status}), reintentando en ${Math.round(backoff / 1000)}s...` });
+            await new Promise(r => setTimeout(r, backoff));
+            continue;
+          }
+        }
         break;
       }
 
-      const json = await response.json();
-      const parsed = adapter.parseResponse(json);
+      if (!fetchResponse || !fetchResponse.ok) {
+        if (fetchResponse?.status === 429 && fallbackIndex < fallbackModels.length) {
+          currentModel = fallbackModels[fallbackIndex];
+          fallbackIndex++;
+          sendEvent('status', { type: 'switching_model', iteration, message: `Cambiando a modelo de fallback: ${currentModel}` });
+          await new Promise(r => setTimeout(r, 500));
+          iteration--;
+          continue;
+        }
+        if (fetchResponse?.status === 429) {
+          sendEvent('error', { message: `Límite de tasa excedido. El sistema reintentó ${maxTries} veces y agotó los modelos de fallback. Intenta cambiar de proveedor o espera unos minutos.` });
+        } else {
+          sendEvent('error', { message: `API error ${fetchResponse?.status ?? 'unknown'}: ${lastError.slice(0, 300)}` });
+        }
+        break;
+      }
+
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let textContent = '';
+      let reasoningContent = '';
+      let hasReasoning = false;
+      const toolCallsMap = new Map<number, any>();
+
+      if (fetchResponse.body) {
+        for await (const chunk of fetchResponse.body as any) {
+          buffer += decoder.decode(chunk, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop() || '';
+          
+          for (const line of lines) {
+            if (!line.startsWith('data: ')) continue;
+            const dataStr = line.slice(6).trim();
+            if (dataStr === '[DONE]') continue;
+            
+            try {
+              const json = JSON.parse(dataStr);
+              
+              // OpenAI / DeepSeek format
+              if (json.choices?.[0]?.delta) {
+                const delta = json.choices[0].delta;
+                if (delta.content) {
+                  textContent += delta.content;
+                  sendEvent('content', { text: delta.content });
+                }
+                if (delta.reasoning_content) {
+                  reasoningContent += delta.reasoning_content;
+                  if (!hasReasoning) {
+                    hasReasoning = true;
+                    // Send this only ONCE so we don't spam the UI
+                    sendEvent('status', { type: 'thinking', iteration });
+                  }
+                  // Keep connection alive without spamming the UI
+                  sendEvent('ping', {});
+                }
+                if (delta.tool_calls) {
+                  for (const tc of delta.tool_calls) {
+                    if (!toolCallsMap.has(tc.index)) {
+                      toolCallsMap.set(tc.index, { id: tc.id, name: tc.function?.name, args: tc.function?.arguments || '' });
+                    } else {
+                      const existing = toolCallsMap.get(tc.index);
+                      if (tc.function?.arguments) existing.args += tc.function.arguments;
+                    }
+                  }
+                }
+              }
+              // Claude format
+              else if (json.type === 'content_block_delta' && json.delta?.text) {
+                textContent += json.delta.text;
+                sendEvent('content', { text: json.delta.text });
+              } else if (json.type === 'content_block_start' && json.content_block?.type === 'tool_use') {
+                toolCallsMap.set(json.index, { id: json.content_block.id, name: json.content_block.name, args: '' });
+              } else if (json.type === 'content_block_delta' && json.delta?.type === 'input_json_delta') {
+                const existing = toolCallsMap.get(json.index);
+                if (existing) existing.args += json.delta.partial_json;
+              }
+              // Gemini format (array of candidates)
+              else if (json.candidates?.[0]?.content?.parts) {
+                const parts = json.candidates[0].content.parts;
+                for (const p of parts) {
+                  if (p.text) {
+                     textContent += p.text;
+                     sendEvent('content', { text: p.text });
+                  }
+                  if (p.functionCall) {
+                     toolCallsMap.set(toolCallsMap.size, { 
+                       id: `gemini-${Date.now()}-${toolCallsMap.size}`, 
+                       name: p.functionCall.name, 
+                       args: typeof p.functionCall.args === 'string' ? p.functionCall.args : JSON.stringify(p.functionCall.args) 
+                     });
+                  }
+                }
+              }
+            } catch (e) {
+              // skip invalid JSON
+            }
+          }
+        }
+      }
+
+      const parsedToolCalls = Array.from(toolCallsMap.values()).map(tc => {
+        let parsedArgs = {};
+        try {
+          parsedArgs = typeof tc.args === 'string' ? JSON.parse(tc.args || '{}') : tc.args;
+        } catch (e) {
+          parsedArgs = { _error: 'JSON parse error: ' + tc.args };
+        }
+        return { id: tc.id, name: tc.name, args: parsedArgs };
+      });
 
       // If there are tool calls, execute them
-      if (parsed.toolCalls && parsed.toolCalls.length > 0) {
-        // Send any partial text
-        if (parsed.text) {
-          sendEvent('content', { text: parsed.text });
-        }
-
+      if (parsedToolCalls.length > 0) {
         // Add the assistant message to conversation (with tool calls)
+        const toolMsgPayload: any = { role: 'assistant', content: textContent || '' };
+        if (reasoningContent) toolMsgPayload.reasoning_content = reasoningContent;
+        
         if (provider === 'claude') {
-          conversationMessages.push({ role: 'assistant', content: json.content });
+          toolMsgPayload.content = textContent ? [{ type: 'text', text: textContent }] : [];
+          parsedToolCalls.forEach(tc => {
+             toolMsgPayload.content.push({ type: 'tool_use', id: tc.id, name: tc.name, input: tc.args });
+          });
         } else if (provider === 'gemini') {
-          conversationMessages.push({
-            role: 'model',
-            parts: json.candidates[0].content.parts,
+          toolMsgPayload.role = 'model';
+          toolMsgPayload.parts = textContent ? [{ text: textContent }] : [];
+          parsedToolCalls.forEach(tc => {
+             toolMsgPayload.parts.push({ functionCall: { name: tc.name, args: tc.args } });
           });
         } else {
-          conversationMessages.push(json.choices[0].message);
+          toolMsgPayload.tool_calls = parsedToolCalls.map(tc => ({
+             id: tc.id, type: 'function', function: { name: tc.name, arguments: JSON.stringify(tc.args) }
+          }));
         }
+        conversationMessages.push(toolMsgPayload);
 
         // Execute each tool call
-        for (const tc of parsed.toolCalls) {
+        for (const tc of parsedToolCalls) {
           sendEvent('tool_call', {
             id: tc.id,
             name: tc.name,
@@ -751,10 +962,7 @@ agentRouter.post('/', async (req: Request, res: Response) => {
         continue;
       }
 
-      // No tool calls — final text response
-      if (parsed.text) {
-        sendEvent('content', { text: parsed.text });
-      }
+      // No tool calls — stream finished successfully
       break;
     }
 

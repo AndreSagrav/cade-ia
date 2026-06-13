@@ -1,10 +1,20 @@
 import type { WriteFileRequest, ReadFileRequest, TreeRequest, RunCommandRequest } from '@shared/types';
 
-const BASE_URL = '';
+export const API_BASE_URL = (() => {
+  try {
+    const env = (import.meta as any)?.env?.VITE_API_BASE_URL as string | undefined;
+    if (env) return env;
+  } catch {}
+  if (typeof window !== 'undefined') {
+    const protocol = window.location.protocol;
+    if (protocol === 'http:' || protocol === 'https:') return '';
+  }
+  return 'http://localhost:3001';
+})();
 
 class ApiClient {
   private async request<T>(path: string, options?: RequestInit): Promise<T> {
-    const res = await fetch(`${BASE_URL}${path}`, {
+    const res = await fetch(`${API_BASE_URL}${path}`, {
       headers: { 'Content-Type': 'application/json' },
       ...options,
     });
@@ -63,12 +73,21 @@ class ApiClient {
     headers: Record<string, string>,
   ): { response: Promise<Response>; abort: () => void } {
     const controller = new AbortController();
-    const response = fetch(`${BASE_URL}${path}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...headers },
-      body: JSON.stringify(body),
-      signal: controller.signal,
-    });
+    const attempt = async (tries = 0): Promise<Response> => {
+      const res = await fetch(`${API_BASE_URL}${path}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...headers },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+      if (res.status === 429 && tries < 2) {
+        const backoff = 500 * Math.pow(2, tries) + Math.floor(Math.random() * 200);
+        await new Promise(r => setTimeout(r, backoff));
+        return attempt(tries + 1);
+      }
+      return res;
+    };
+    const response = attempt();
     return { response, abort: () => controller.abort() };
   }
 
@@ -81,12 +100,21 @@ class ApiClient {
     headers: Record<string, string> = {},
   ): { response: Promise<Response>; abort: () => void } {
     const controller = new AbortController();
-    const response = fetch(`${BASE_URL}/api/ai/agent`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...headers },
-      body: JSON.stringify(body),
-      signal: controller.signal,
-    });
+    const attempt = async (tries = 0): Promise<Response> => {
+      const res = await fetch(`${API_BASE_URL}/api/ai/agent`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...headers },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+      if (res.status === 429 && tries < 2) {
+        const backoff = 500 * Math.pow(2, tries) + Math.floor(Math.random() * 200);
+        await new Promise(r => setTimeout(r, backoff));
+        return attempt(tries + 1);
+      }
+      return res;
+    };
+    const response = attempt();
     return { response, abort: () => controller.abort() };
   }
 }

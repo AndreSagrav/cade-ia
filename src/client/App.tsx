@@ -12,6 +12,7 @@ export function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [authenticated, setAuthenticated] = useState(false);
   const [authChecked, setAuthChecked] = useState(false);
+  const apiBase = typeof window !== 'undefined' && (window.location.protocol === 'http:' || window.location.protocol === 'https:') ? '' : 'http://localhost:3001';
 
   const rootPath = useEditorStore((s) => s.rootPath);
   const folderPickerOpen = useEditorStore((s) => s.folderPickerOpen);
@@ -22,14 +23,22 @@ export function App() {
   useEffect(() => {
     const token = localStorage.getItem('codeai-auth');
     if (!token) { setAuthChecked(true); return; }
-    fetch('/api/auth/verify', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token }),
-    })
-      .then((r) => { if (r.ok) setAuthenticated(true); })
-      .catch(() => {})
-      .finally(() => setAuthChecked(true));
+    const wapi = (typeof window !== 'undefined' ? (window as any).api : null);
+    if (wapi?.auth?.verify) {
+      wapi.auth.verify(token)
+        .then((res: any) => { if (res?.ok) setAuthenticated(true); })
+        .catch(() => {})
+        .finally(() => setAuthChecked(true));
+    } else {
+      fetch(`${apiBase}/api/auth/verify`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token }),
+      })
+        .then((r) => { if (r.ok) setAuthenticated(true); })
+        .catch(() => {})
+        .finally(() => setAuthChecked(true));
+    }
   }, []);
 
   useEffect(() => {
@@ -61,6 +70,14 @@ export function App() {
       handleRefreshTree();
     }
   }, [authenticated, rootPath, handleRefreshTree]);
+
+  useEffect(() => {
+    if (!authenticated) return;
+    const looksAbsolute = rootPath ? /^(?:[a-zA-Z]:\\|\\\\|\/)/.test(rootPath) : false;
+    if (!rootPath || !looksAbsolute) {
+      setFolderPickerOpen(true);
+    }
+  }, [authenticated, rootPath, setFolderPickerOpen]);
 
   if (!authChecked) {
     return (

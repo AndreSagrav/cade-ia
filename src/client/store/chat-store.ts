@@ -14,11 +14,18 @@ interface ChatState {
   // Current state
   isStreaming: boolean;
   streamContent: string;
+  agentStatus: string | null;
   attachments: Attachment[];
 
   // Mode
   agentMode: boolean;
   adaptiveMode: boolean;
+  /** Hide tool traces and actionable blocks from chat rendering */
+  silentMode: boolean;
+  /** Automatically apply agent file changes to disk (no preview) */
+  autoApply: boolean;
+  /** Automatically execute agent run commands without confirmation */
+  autoRun: boolean;
 
   // Model
   selectedModel: string;
@@ -39,12 +46,16 @@ interface ChatState {
   clearCurrentSession: () => void;
   setStreaming: (streaming: boolean) => void;
   setStreamContent: (content: string) => void;
+  setAgentStatus: (status: string | null) => void;
   appendStreamContent: (chunk: string) => void;
   addAttachment: (attachment: Attachment) => void;
   removeAttachment: (id: string) => void;
   clearAttachments: () => void;
   setAgentMode: (enabled: boolean) => void;
   setAdaptiveMode: (enabled: boolean) => void;
+  setSilentMode: (enabled: boolean) => void;
+  setAutoApply: (enabled: boolean) => void;
+  setAutoRun: (enabled: boolean) => void;
   setSelectedModel: (model: string) => void;
   addRecentModel: (model: string) => void;
   incrementModelUsage: (modelId: string, tokens: number) => void;
@@ -67,9 +78,13 @@ export const useChatStore = create<ChatState>()(
       historyOpen: false,
       isStreaming: false,
       streamContent: '',
+      agentStatus: null,
       attachments: [],
       agentMode: false,
       adaptiveMode: false,
+      silentMode: true,
+      autoApply: true,
+      autoRun: false,
       selectedModel: 'gemini-2.5-flash',
       recentModels: [],
       modelUsage: {},
@@ -81,9 +96,9 @@ export const useChatStore = create<ChatState>()(
           const current = state.modelUsage[modelId];
           const newUsage = { ...state.modelUsage };
           if (current && current.date === today) {
-            newUsage[modelId] = { date: today, tokens: current.tokens + tokens, requests: current.requests };
+            newUsage[modelId] = { date: today, tokens: current.tokens + tokens, requests: (current.requests || 0) + 1 };
           } else {
-            newUsage[modelId] = { date: today, tokens, requests: 0 };
+            newUsage[modelId] = { date: today, tokens, requests: 1 };
           }
           return { modelUsage: newUsage };
         });
@@ -95,7 +110,7 @@ export const useChatStore = create<ChatState>()(
           const current = state.modelUsage[modelId];
           const newUsage = { ...state.modelUsage };
           if (current && current.date === today) {
-            newUsage[modelId] = { date: today, tokens: current.tokens, requests: current.requests + 1 };
+            newUsage[modelId] = { date: today, tokens: current.tokens, requests: (current.requests || 0) + 1 };
           } else {
             newUsage[modelId] = { date: today, tokens: 0, requests: 1 };
           }
@@ -239,10 +254,10 @@ export const useChatStore = create<ChatState>()(
         });
       },
 
-      setStreaming: (streaming) => set({ isStreaming: streaming }),
-      setStreamContent: (content) => set({ streamContent: content }),
-      appendStreamContent: (chunk) =>
-        set({ streamContent: get().streamContent + chunk }),
+      setStreaming: (isStreaming) => set({ isStreaming }),
+      setStreamContent: (streamContent) => set({ streamContent }),
+      setAgentStatus: (agentStatus) => set({ agentStatus }),
+      appendStreamContent: (chunk) => set((s) => ({ streamContent: s.streamContent + chunk })),
 
       addAttachment: (attachment) =>
         set({ attachments: [...get().attachments, attachment] }),
@@ -252,6 +267,9 @@ export const useChatStore = create<ChatState>()(
 
       setAgentMode: (enabled) => set({ agentMode: enabled }),
       setAdaptiveMode: (enabled) => set({ adaptiveMode: enabled }),
+      setSilentMode: (enabled) => set({ silentMode: enabled }),
+      setAutoApply: (enabled) => set({ autoApply: enabled }),
+      setAutoRun: (enabled) => set({ autoRun: enabled }),
 
       setSelectedModel: (model) => {
         set({ selectedModel: model });
@@ -274,6 +292,10 @@ export const useChatStore = create<ChatState>()(
         recentModels: state.recentModels,
         agentMode: state.agentMode,
         adaptiveMode: state.adaptiveMode,
+        modelUsage: state.modelUsage,
+        silentMode: state.silentMode,
+        autoApply: state.autoApply,
+        autoRun: state.autoRun,
       }),
     },
   ),

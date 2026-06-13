@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { Send, Bot, Sparkles, Zap, Plus, X, History, MessageSquare, Trash2, Mic, GitBranch, Undo2 } from 'lucide-react';
+import { Send, Bot, Sparkles, Zap, Plus, X, History, MessageSquare, Trash2, Mic, GitBranch, Undo2, Loader2 } from 'lucide-react';
 import { ModelSelector } from './ModelSelector';
 import { useChatStore } from '@/store/chat-store';
 import { AI_MODELS } from '@shared/models';
@@ -17,10 +17,11 @@ export function ChatPanel() {
 
   const {
     sessions, openSessionIds, activeSessionId, historyOpen,
-    isStreaming, streamContent,
+    isStreaming, streamContent, agentStatus,
     selectedModel, agentMode, setAgentMode,
     addMessage, createSession, closeSession, reopenSession, deleteSession,
-    setActiveSession, setHistoryOpen, abortAgent
+    setActiveSession, setHistoryOpen, abortAgent,
+    silentMode, setSilentMode, autoApply, setAutoApply, autoRun, setAutoRun
   } = useChatStore();
 
   const openSessions = openSessionIds
@@ -86,6 +87,18 @@ export function ChatPanel() {
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); }
   };
+
+  const lastUserMessage = (() => {
+    const msgs = messages.filter(m => m.role === 'user');
+    return msgs.length > 0 ? msgs[msgs.length - 1] : null;
+  })();
+
+  const handleContinue = useCallback(async () => {
+    if (isStreaming) return;
+    const last = lastUserMessage;
+    if (!last || !last.content?.trim()) return;
+    await streamChat(last.content);
+  }, [isStreaming, lastUserMessage]);
 
   return (
     <div className="relative flex h-full flex-col" style={{ background: 'hsl(var(--background))' }}>
@@ -153,6 +166,48 @@ export function ChatPanel() {
             title="Historial"
           >
             <History size={13} />
+          </button>
+          <button
+            onClick={() => setSilentMode(!silentMode)}
+            className={cn(
+              'flex items-center gap-1 rounded-full px-2 py-1 text-[10px] font-semibold transition-all',
+              silentMode ? 'text-foreground' : 'text-muted-foreground hover:text-foreground',
+            )}
+            style={{
+              background: silentMode ? 'hsl(var(--muted) / 0.7)' : 'hsl(var(--muted) / 0.5)',
+              border: '1px solid hsl(var(--border))',
+            }}
+            title="Silencio del chat"
+          >
+            Silencio
+          </button>
+          <button
+            onClick={() => setAutoApply(!autoApply)}
+            className={cn(
+              'flex items-center gap-1 rounded-full px-2 py-1 text-[10px] font-semibold transition-all',
+              autoApply ? 'text-foreground' : 'text-muted-foreground hover:text-foreground',
+            )}
+            style={{
+              background: autoApply ? 'hsl(var(--muted) / 0.7)' : 'hsl(var(--muted) / 0.5)',
+              border: '1px solid hsl(var(--border))',
+            }}
+            title="Aplicación automática de cambios"
+          >
+            Auto
+          </button>
+          <button
+            onClick={() => setAutoRun(!autoRun)}
+            className={cn(
+              'flex items-center gap-1 rounded-full px-2 py-1 text-[10px] font-semibold transition-all',
+              autoRun ? 'text-warning' : 'text-muted-foreground hover:text-foreground',
+            )}
+            style={{
+              background: autoRun ? 'hsl(var(--warning) / 0.12)' : 'hsl(var(--muted) / 0.5)',
+              border: autoRun ? '1px solid hsl(var(--warning) / 0.3)' : '1px solid hsl(var(--border))',
+            }}
+            title="Ejecuta comandos del agente sin confirmar"
+          >
+            Autorun
           </button>
           <button
             onClick={() => setAgentMode(!agentMode)}
@@ -241,8 +296,13 @@ export function ChatPanel() {
                   </div>
                   {streamContent ? (
                     <p className="text-sm leading-relaxed whitespace-pre-wrap" style={{ color: 'hsl(var(--foreground))' }}>
-                      {streamContent}
+                      {silentMode ? parseAgentMessage(streamContent).prose : streamContent}
                     </p>
+                  ) : agentStatus ? (
+                    <div className="flex items-center gap-2 pt-1 pb-1" style={{ color: 'hsl(var(--accent))' }}>
+                      <Loader2 size={14} className="animate-spin" />
+                      <span className="text-[13px] font-medium animate-pulse">{agentStatus}</span>
+                    </div>
                   ) : (
                     <div className="flex items-center gap-1.5 pt-1">
                       {[0, 1, 2].map(i => (
@@ -343,9 +403,20 @@ export function ChatPanel() {
                 <Send size={15} className="ml-0.5" />
               </button>
             ) : (
-              <button className="flex h-9 w-9 items-center justify-center rounded-full text-muted-foreground transition-colors duration-150 hover:text-foreground" style={{ background: 'hsl(var(--muted))' }}>
-                <Mic size={16} />
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={handleContinue}
+                  disabled={!lastUserMessage}
+                  className="rounded-full px-3 h-9 text-[12px] font-semibold transition-all duration-150 disabled:opacity-50 hover:scale-[1.02] active:scale-95"
+                  style={{ background: 'hsl(var(--accent) / 0.18)', color: 'hsl(var(--accent))', border: '1px solid hsl(var(--accent) / 0.35)' }}
+                  title="Reenviar el último mensaje del usuario"
+                >
+                  Continuar
+                </button>
+                <button className="flex h-9 w-9 items-center justify-center rounded-full text-muted-foreground transition-colors duration-150 hover:text-foreground" style={{ background: 'hsl(var(--muted))' }}>
+                  <Mic size={16} />
+                </button>
+              </div>
             )}
           </div>
         </div>
@@ -397,11 +468,23 @@ function parseAgentMessage(content: string): { prose: string; fileCount: number;
   let m;
   while ((m = fileRe.exec(content)) !== null) files.push(m[1].trim());
   while ((m = runRe.exec(content)) !== null) runCount++;
-  const prose = content
-    .replace(fileRe, '')
-    .replace(runRe, '')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
+  // Strip file/run actionable blocks
+  let prose = content.replace(fileRe, '').replace(runRe, '');
+  // Additionally strip JSON tool-call blocks like {"name":"read_file", ...}
+  // Only remove if they look like tool calls; keep other JSON examples
+  prose = prose.replace(/```json\n[\s\S]*?```/g, (block) => {
+    const isTool = /"name"\s*:\s*"(read_file|write_file|list_files|search_files|run(?:_|\s)?command)"/i.test(block);
+    return isTool ? '' : block;
+  });
+  // Also remove unfenced tool-call JSON (bare objects)
+  prose = prose.replace(/\{[\s\S]*?"name"\s*:\s*"(read_file|write_file|list_files|search_files|run(?:_|\s)?command)"[\s\S]*?\}/gi, '');
+  // Remove common trace lines that models sometimes print
+  prose = prose
+    .replace(/^[\s\t]*[\u{1F4D6}\u{270F}\u{1F4C1}\u{1F50D}\u26A1].*$/gmu, '') // 📖 ✏️ 📁 🔍 ⚡ lines
+    .replace(/^\s*✅\s*Resultado recibido.*$/gmu, '')
+    .replace(/^\s*📝\s*Archivo modificado:.*$/gmu, '')
+    .replace(/^\s*Ejecutando\s*`.*`.*$/gmu, '');
+  prose = prose.replace(/\n{3,}/g, '\n\n').trim();
   return { prose, fileCount: files.length, runCount, files };
 }
 
@@ -414,9 +497,12 @@ function MessageBubble({ message, isLast }: { message: any; isLast: boolean }) {
       <div className="flex justify-end group">
         <div className="relative max-w-[85%]">
           <button
-            onClick={() => {
+            onClick={async () => {
               if (confirm('¿Revertir proyecto hasta este punto? Se desharán todos los cambios de la IA posteriores a este mensaje.')) {
-                rewindToMessage(message.id);
+                await rewindToMessage(message.id);
+                if (message.content && message.content.trim()) {
+                  await streamChat(message.content);
+                }
               }
             }}
             className="absolute right-full top-1/2 -translate-y-1/2 mr-2 opacity-0 group-hover:opacity-100 p-1.5 rounded-full transition-all"
@@ -447,6 +533,7 @@ function MessageBubble({ message, isLast }: { message: any; isLast: boolean }) {
   }
 
   const { prose, fileCount, runCount, files } = parseAgentMessage(message.content || '');
+  const { silentMode } = useChatStore();
   const hasActions = fileCount + runCount > 0;
 
   return (
@@ -464,7 +551,7 @@ function MessageBubble({ message, isLast }: { message: any; isLast: boolean }) {
             {prose}
           </div>
         )}
-        {hasActions && (
+        {!silentMode && hasActions && (
           <div
             className="mt-2 rounded-lg border px-3 py-2 text-[12px]"
             style={{

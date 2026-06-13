@@ -10,6 +10,7 @@ export function AuthGate({ onUnlock }: AuthGateProps) {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const apiBase = typeof window !== 'undefined' && (window.location.protocol === 'http:' || window.location.protocol === 'https:') ? '' : 'http://localhost:3001';
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -17,18 +18,31 @@ export function AuthGate({ onUnlock }: AuthGateProps) {
     setLoading(true);
 
     try {
-      const res = await fetch('/api/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ user, password }),
-      });
-      const data = await res.json();
-
-      if (res.ok && data.token) {
-        localStorage.setItem('codeai-auth', data.token);
-        onUnlock();
+      const wapi = (typeof window !== 'undefined' ? (window as any).api : null);
+      if (wapi?.auth?.login) {
+        const data = await wapi.auth.login(user, password);
+        if (data?.token) {
+          localStorage.setItem('codeai-auth', data.token);
+          localStorage.setItem('codeai-user', user);
+          onUnlock();
+        } else {
+          setError(data?.error || 'Credenciales inválidas');
+        }
       } else {
-        setError(data.error || 'Credenciales inválidas');
+        const res = await fetch(`${apiBase}/api/auth/login`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ user, password }),
+        });
+        const data = await res.json();
+
+        if (res.ok && data.token) {
+          localStorage.setItem('codeai-auth', data.token);
+          localStorage.setItem('codeai-user', user);
+          onUnlock();
+        } else {
+          setError(data.error || 'Credenciales inválidas');
+        }
       }
     } catch {
       setError('Error de conexión con el servidor');

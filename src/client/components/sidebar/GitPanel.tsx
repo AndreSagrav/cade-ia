@@ -1,7 +1,8 @@
 import { useState, useCallback, useEffect } from 'react';
-import { GitBranch, RefreshCw, ArrowUpFromLine, ArrowDownToLine, Plus, FolderGit2, ExternalLink, ChevronDown, ChevronRight, AlertCircle, Github } from 'lucide-react';
+import { GitBranch, RefreshCw, ArrowUpFromLine, ArrowDownToLine, Plus, FolderGit2, ExternalLink, ChevronDown, ChevronRight, AlertCircle, Github, Download } from 'lucide-react';
 import { useEditorStore } from '@/store/editor-store';
 import { useSettingsStore } from '@/store/settings-store';
+import { useProject } from '@/lib/use-project';
 
 
 interface GHUser { login: string; avatar_url: string; name: string; html_url: string }
@@ -28,7 +29,12 @@ function parseStatus(raw: string): ChangedFile[] {
 
 export function GitPanel() {
   const rootPath = useEditorStore((s) => s.rootPath);
-  const { githubAccounts, activeGithubAccount, setActiveGithubAccount } = useSettingsStore();
+  const settingsStore = useSettingsStore();
+  const { handleFolderSelected } = useProject();
+  const githubAccounts = settingsStore.githubAccounts || [];
+  const activeGithubAccount = settingsStore.activeGithubAccount;
+  const setActiveGithubAccount = settingsStore.setActiveGithubAccount;
+  
   const activeAccount = githubAccounts.find(a => a.username === activeGithubAccount) || githubAccounts[0];
   const githubToken = activeAccount?.token || '';
 
@@ -324,54 +330,94 @@ export function GitPanel() {
             </div>
           </div>
 
-          {/* My Repos (expandable) */}
-          <div className="border-t" style={{ borderColor: 'hsl(var(--border))' }}>
-            <button
-              onClick={() => { setShowRepos(!showRepos); if (!showRepos && repos.length === 0) fetchRepos(); }}
-              className="flex w-full items-center gap-1.5 px-3 py-2 text-[10px] font-bold uppercase tracking-[0.1em] text-muted-foreground hover:text-foreground transition-colors"
-            >
-              {showRepos ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
-              Mis Repositorios
-            </button>
-            {showRepos && (
-              <div className="max-h-[200px] overflow-y-auto pb-2">
-                {reposLoading ? (
-                  <div className="flex items-center justify-center py-4">
-                    <RefreshCw size={14} className="animate-spin text-muted-foreground" />
-                  </div>
-                ) : repos.length === 0 ? (
-                  <p className="px-3 py-2 text-[11px] text-muted-foreground">No se encontraron repositorios</p>
-                ) : (
-                  repos.map(repo => (
-                    <div key={repo.full_name} className="flex items-center gap-2 px-3 py-[6px] hover:bg-muted/30 transition-colors">
-                      <FolderGit2 size={12} className="shrink-0 text-muted-foreground" />
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-1">
-                          <span className="text-[11px] font-medium truncate">{repo.name}</span>
-                          {repo.private && (
-                            <span className="text-[8px] rounded px-1 py-px font-bold" style={{ background: '#eab30822', color: '#eab308' }}>
-                              PRIV
-                            </span>
-                          )}
-                        </div>
-                        {repo.description && (
-                          <p className="text-[9px] text-muted-foreground truncate">{repo.description}</p>
-                        )}
-                      </div>
-                      <a
-                        href={repo.html_url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="rounded p-1 text-muted-foreground hover:text-foreground transition-colors"
-                      >
-                        <ExternalLink size={10} />
-                      </a>
-                    </div>
-                  ))
-                )}
+      {/* My Repos (expandable) */}
+      <div className="border-t" style={{ borderColor: 'hsl(var(--border))' }}>
+        <button
+          onClick={() => { setShowRepos(!showRepos); if (!showRepos && repos.length === 0) fetchRepos(); }}
+          className="flex w-full items-center gap-1.5 px-3 py-2 text-[10px] font-bold uppercase tracking-[0.1em] text-muted-foreground hover:text-foreground transition-colors"
+        >
+          {showRepos ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
+          Mis Repositorios
+        </button>
+        {showRepos && (
+          <div className="max-h-[200px] overflow-y-auto pb-2">
+            {reposLoading ? (
+              <div className="flex items-center justify-center py-4">
+                <RefreshCw size={14} className="animate-spin text-muted-foreground" />
               </div>
+            ) : repos.length === 0 ? (
+              <p className="px-3 py-2 text-[11px] text-muted-foreground">No se encontraron repositorios</p>
+            ) : (
+              repos.map(repo => (
+                <div key={repo.full_name} className="flex items-center gap-2 px-3 py-[6px] hover:bg-muted/30 transition-colors">
+                  <FolderGit2 size={12} className="shrink-0 text-muted-foreground" />
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-1">
+                      <span className="text-[11px] font-medium truncate">{repo.name}</span>
+                      {repo.private && (
+                        <span className="text-[8px] rounded px-1 py-px font-bold" style={{ background: '#eab30822', color: '#eab308' }}>
+                          PRIV
+                        </span>
+                      )}
+                    </div>
+                    {repo.description && (
+                      <p className="text-[9px] text-muted-foreground truncate">{repo.description}</p>
+                    )}
+                  </div>
+                  <div className="flex gap-1">
+                    <button
+                      onClick={async () => {
+                        const defaultDir = rootPath 
+                          ? rootPath.substring(0, Math.max(rootPath.lastIndexOf('/'), rootPath.lastIndexOf('\\'))) 
+                          : 'C:/Users/Taller SK/Documents/PROYECTOS';
+                        const parentDir = prompt(`¿En qué carpeta deseas clonar ${repo.name}?`, defaultDir);
+                        if (!parentDir) return;
+                        
+                        const destination = `${parentDir}/${repo.name}`.replace(/\\/g, '/');
+                        setReposLoading(true);
+                        try {
+                          let cloneUrl = repo.clone_url;
+                          if (githubToken && cloneUrl.startsWith('https://')) {
+                            cloneUrl = cloneUrl.replace('https://', `https://x-access-token:${githubToken}@`);
+                          }
+                          
+                          const res = await fetch('/api/git/clone', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ url: cloneUrl, destination })
+                          }).then(r => r.json());
+                          
+                          if (res.ok) {
+                            handleFolderSelected(destination);
+                          } else {
+                            alert('Error clonando: ' + res.error);
+                          }
+                        } catch (e: any) {
+                          alert('Error: ' + e.message);
+                        }
+                        setReposLoading(false);
+                      }}
+                      title="Clonar y Abrir Proyecto"
+                      className="rounded p-1 text-accent hover:bg-accent/20 transition-colors"
+                    >
+                      <Download size={12} />
+                    </button>
+                    <a
+                      href={repo.html_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="rounded p-1 text-muted-foreground hover:bg-muted transition-colors"
+                      title="Ver en GitHub"
+                    >
+                      <ExternalLink size={12} />
+                    </a>
+                  </div>
+                </div>
+              ))
             )}
           </div>
+        )}
+      </div>
         </>
       )}
     </div>

@@ -1,17 +1,61 @@
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback, useEffect } from 'react';
 import { TerminalIcon, X, Plus, ChevronRight } from 'lucide-react';
 import { useSettingsStore } from '@/store/settings-store';
+import { useEditorStore } from '@/store/editor-store';
 import type { KeyboardEvent } from 'react';
 
 export function Terminal() {
   const [input, setInput] = useState('');
   const [output, setOutput] = useState<string[]>([
     '$ Bienvenido a CodeAI Studio Terminal',
-    '$ Escribe un comando para ejecutar...',
+    '$ Terminal lista. Escribe comandos...',
   ]);
   const [, setHistory] = useState<string[]>([]);
   const inputRef = useRef<HTMLInputElement>(null);
   const { toggleTerminal } = useSettingsStore();
+  const rootPath = useEditorStore((s) => s.rootPath);
+  const sessionIdRef = useRef<string | null>(null);
+  const wapi = (typeof window !== 'undefined' ? (window as any).api : null);
+  const useIpc = !!(wapi && wapi.terminal && wapi.terminal.start);
+
+  // Start persistent terminal session via IPC
+  useEffect(() => {
+    if (!useIpc || !rootPath) return;
+    let mounted = true;
+    let cleanupData: (() => void) | null = null;
+    let cleanupExit: (() => void) | null = null;
+
+    (async () => {
+      try {
+        const res = await wapi.terminal.start(rootPath, 'powershell.exe');
+        if (!mounted) return;
+        if (res.error) {
+          setOutput((o) => [...o, `[ERROR] ${res.error}`]);
+          return;
+        }
+        sessionIdRef.current = res.sessionId;
+        cleanupData = wapi.terminal.onData(res.sessionId, (data: string) => {
+          setOutput((o) => [...o, data]);
+        });
+        cleanupExit = wapi.terminal.onExit(res.sessionId, (code: number | null) => {
+          setOutput((o) => [...o, `$ Proceso terminado (código: ${code ?? '?'})`]);
+          sessionIdRef.current = null;
+        });
+      } catch (e: any) {
+        if (mounted) setOutput((o) => [...o, `[ERROR] ${e.message || 'No se pudo iniciar terminal'}`]);
+      }
+    })();
+
+    return () => {
+      mounted = false;
+      if (cleanupData) cleanupData();
+      if (cleanupExit) cleanupExit();
+      if (sessionIdRef.current) {
+        try { wapi.terminal.kill(sessionIdRef.current); } catch {}
+        sessionIdRef.current = null;
+      }
+    };
+  }, [rootPath, useIpc]);
 
   const handleRun = useCallback(async () => {
     if (!input.trim()) return;
@@ -20,6 +64,16 @@ export function Terminal() {
     setOutput((o) => [...o, `$ ${cmd}`]);
     setInput('');
 
+    if (useIpc && sessionIdRef.current) {
+      try {
+        await wapi.terminal.input(sessionIdRef.current, cmd + '\r\n');
+      } catch (e: any) {
+        setOutput((o) => [...o, `[ERROR] ${e.message || 'No se pudo enviar comando'}`]);
+      }
+      return;
+    }
+
+    // Fallback HTTP (dev only)
     try {
       const res = await fetch('/api/terminal/run', {
         method: 'POST',
@@ -32,7 +86,7 @@ export function Terminal() {
     } catch (err) {
       setOutput((o) => [...o, `[ERROR] No se pudo ejecutar el comando`]);
     }
-  }, [input]);
+  }, [input, useIpc]);
 
   const handleKeyDown = (e: KeyboardEvent) => {
     if (e.key === 'Enter') {

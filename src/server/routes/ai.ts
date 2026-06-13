@@ -1,5 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { config } from '../config';
+import { z } from 'zod';
 
 export const aiRouter = Router();
 
@@ -22,6 +23,9 @@ aiRouter.post('/claude', async (req: Request, res: Response) => {
   if (!apiKey) return res.status(401).json({ error: 'No Anthropic API key configured' });
 
   try {
+    const bodySchema = z.object({}).passthrough();
+    const parsed = bodySchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: 'Invalid body' });
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
@@ -29,7 +33,7 @@ aiRouter.post('/claude', async (req: Request, res: Response) => {
         'x-api-key': apiKey,
         'anthropic-version': '2023-06-01',
       },
-      body: JSON.stringify(req.body),
+      body: JSON.stringify(parsed.data),
     });
 
     // Stream the response back
@@ -62,13 +66,16 @@ aiRouter.post('/openai', async (req: Request, res: Response) => {
   if (apiKey === 'Bearer ') return res.status(401).json({ error: 'No OpenAI API key' });
 
   try {
+    const bodySchema = z.object({}).passthrough();
+    const parsed = bodySchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: 'Invalid body' });
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Authorization': apiKey,
       },
-      body: JSON.stringify(req.body),
+      body: JSON.stringify(parsed.data),
     });
 
     res.status(response.status);
@@ -92,7 +99,14 @@ aiRouter.post('/openai', async (req: Request, res: Response) => {
 
 // Gemini proxy
 aiRouter.post('/gemini', async (req: Request, res: Response) => {
-  const { apiKey: clientKey, model, body: geminiBody } = req.body;
+  const schema = z.object({
+    apiKey: z.string().optional(),
+    model: z.string().min(1),
+    body: z.object({}).passthrough(),
+  });
+  const parsed = schema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'Invalid body' });
+  const { apiKey: clientKey, model, body: geminiBody } = parsed.data;
   const apiKey = clientKey || config.geminiApiKey;
   if (!apiKey) return res.status(401).json({ error: 'No Gemini API key' });
 
@@ -130,13 +144,16 @@ aiRouter.post('/deepseek', async (req: Request, res: Response) => {
   if (apiKey === 'Bearer ') return res.status(401).json({ error: 'No DeepSeek API key' });
 
   try {
+    const bodySchema = z.object({}).passthrough();
+    const parsed = bodySchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: 'Invalid body' });
     const response = await fetch('https://api.deepseek.com/chat/completions', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Authorization': apiKey,
       },
-      body: JSON.stringify(req.body),
+      body: JSON.stringify(parsed.data),
     });
 
     res.status(response.status);
@@ -164,13 +181,16 @@ aiRouter.post('/nvidia', async (req: Request, res: Response) => {
   if (apiKey === 'Bearer ') return res.status(401).json({ error: 'No NVIDIA API key' });
 
   try {
+    const bodySchema = z.object({}).passthrough();
+    const parsed = bodySchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: 'Invalid body' });
     const response = await fetch('https://integrate.api.nvidia.com/v1/chat/completions', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Authorization': apiKey,
       },
-      body: JSON.stringify(req.body),
+      body: JSON.stringify(parsed.data),
     });
 
     res.status(response.status);
@@ -198,6 +218,9 @@ aiRouter.post('/openrouter', async (req: Request, res: Response) => {
   if (apiKey === 'Bearer ') return res.status(401).json({ error: 'No OpenRouter API key' });
 
   try {
+    const bodySchema = z.object({}).passthrough();
+    const parsed = bodySchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: 'Invalid body' });
     const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
       method: 'POST',
       headers: {
@@ -206,7 +229,7 @@ aiRouter.post('/openrouter', async (req: Request, res: Response) => {
         'HTTP-Referer': 'https://codeai.studio',
         'X-Title': 'CodeAI Studio',
       },
-      body: JSON.stringify(req.body),
+      body: JSON.stringify(parsed.data),
     });
 
     res.status(response.status);

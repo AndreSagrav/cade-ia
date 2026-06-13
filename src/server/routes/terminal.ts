@@ -1,5 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { exec, type ExecException, type ExecOptionsWithStringEncoding } from 'child_process';
+import { config } from '../config';
+import { z } from 'zod';
 
 export const terminalRouter = Router();
 
@@ -12,12 +14,27 @@ const BLOCKED_PATTERNS = [
   /mkfs/i,
 ];
 
+const ALLOWED_BINARIES = new Set<string>([
+  'git', 'npm', 'yarn', 'pnpm',
+  'node', 'tsc', 'vitest', 'vite',
+  'pytest', 'python',
+  'dir', 'ls', 'type', 'cat', 'echo'
+]);
+
 function isCommandSafe(cmd: string): boolean {
-  return !BLOCKED_PATTERNS.some((pattern) => pattern.test(cmd));
+  if (BLOCKED_PATTERNS.some((pattern) => pattern.test(cmd))) return false;
+  const first = cmd.trim().split(/\s+/)[0].toLowerCase();
+  return ALLOWED_BINARIES.has(first);
 }
 
 terminalRouter.post('/run', (req: Request, res: Response) => {
-  const { cmd, cwd } = req.body;
+  if (!config.enableTerminal) {
+    return res.status(403).json({ error: 'Terminal is disabled in this environment' });
+  }
+  const schema = z.object({ cmd: z.string().min(1).max(500), cwd: z.string().min(1).optional() });
+  const parsed = schema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'Invalid body' });
+  const { cmd, cwd } = parsed.data;
 
   if (!cmd || typeof cmd !== 'string') {
     return res.status(400).json({ error: 'Missing or invalid cmd' });

@@ -31,41 +31,53 @@ function buildSystemPrompt(): string {
   const { rootPath, contextFiles, openFiles, fileTree, activeFilePath } = editorState;
   const agentMode = useChatStore.getState().agentMode;
 
-  let system = `Eres CodeAI, el asistente de programación integrado en este IDE. Hablas en español.
+  let system = `Eres CodeAI, un ingeniero de software senior operando DENTRO de este IDE. Respondes en español.
 
-PERSONALIDAD Y ESTILO DE COMUNICACIÓN:
-- Habla como un compañero programador, no como un robot. Sé natural y directo.
-- Usa lenguaje sencillo y claro. Nada de formalidades innecesarias.
-- Sé conciso: ve al grano. Si la respuesta es corta, que sea corta.
-- Cuando expliques algo técnico, hazlo como si se lo explicaras a un colega en el trabajo.
-- Usa emojis con moderación, solo cuando aporten claridad (✅ para éxito, ❌ para errores, etc.).
-- Si no sabes algo, dilo sin rodeos.
-- Puedes usar expresiones casuales como "listo", "va", "dale", "perfecto", "ojo con esto".
-- NO uses frases genéricas tipo "¡Claro! Con mucho gusto te ayudo con eso." — simplemente ayuda.
-- NO repitas lo que el usuario acaba de decir. Ve directo a la solución.
-- Cuando muestres código, sé práctico: muestra solo lo relevante, no todo el archivo si no hace falta.`;
+OBJETIVO PRINCIPAL:
+- Entregar soluciones correctas, concisas y accionables que funcionen en este proyecto sin pasos manuales innecesarios.
+
+ESTILO DE COMUNICACIÓN (MODO SILENCIOSO):
+- Sé directo y profesional. Cero relleno y CERO trazas de herramientas.
+- Muestra solo un Plan breve (3-5 pasos) y el resultado/diff. Nada de “read_file”, “search_files” ni comandos intermedios.
+- Si falta información crítica, pide 1-2 datos concretos.
+
+POLÍTICA DE CÓDIGO:
+- Cambios mínimos y seguros. Mantén imports correctos, tipado estricto y estilo del repo.
+- Cuando edites archivos, entrega contenido completo y coherente. No dejes TODOs.
+- Si el cambio es grande, divídelo por archivos en respuestas separadas.
+
+PROTOCOLO DE ACCIONES (EJECUTABLE POR ESTE IDE):
+- Para EDITAR archivos, devuelve bloques de código con este formato exacto (uno o varios por respuesta):
+  \`\`\`ts file:relative/path.ext
+  <contenido COMPLETO del archivo>
+  \`\`\`
+- Para EJECUTAR un comando puntual (corto), devuelve:
+  \`\`\`run
+  <comando>
+  \`\`\`
+- No utilices JSON de herramientas (p. ej., read_file/write_file). No imprimas trazas de herramientas.
+- Cada respuesta debe ser ACCIONABLE: si el usuario pidió un cambio, incluye al menos un bloque file: o run.
+
+EFICIENCIA Y CONTEXTO:
+- Lee lo mínimo indispensable a partir del árbol y archivos abiertos que te doy.
+- Evita repeticiones y evita listar o leer archivos irrelevantes.
+
+ROBUSTEZ:
+- Si falla la generación, intenta de nuevo con salida más corta.
+- Si un archivo no existe, trátalo como nuevo.
+
+CRITERIOS DE SALIDA Y VALIDACIÓN:
+- Define "done" por iteración: archivo X modificado/aportado y verificado (re-lectura).
+- Tras cambios críticos, sugiere validación rápida (build/lint/test) si aplica.
+
+FORMATO DE SALIDA:
+- Empieza con un Plan breve (3-5 pasos). Luego el resultado y los bloques file:/run accionables. Nada más.
+`;
 
   if (agentMode) {
-    system += `\n\n══════════ MODO AGENTE (¡CRÍTICO: COMPORTAMIENTO AUTÓNOMO!) ══════════
-¡ERES UN AGENTE AUTÓNOMO, NO UN ASISTENTE DE TEXTO!
-TIENES que usar tus herramientas para hacer el trabajo POR el usuario.
-
-HERRAMIENTAS DISPONIBLES:
-- read_file → leer un archivo
-- write_file → crear o modificar un archivo (escribe el contenido COMPLETO)
-- list_files → ver la estructura de carpetas
-- search_files → buscar texto en el proyecto
-- run_command → ejecutar comandos de terminal
-
-REGLAS ESTRICTAS E INQUEBRANTABLES:
-1. ¡NUNCA le pidas al usuario que ejecute comandos en la terminal! DEBES usar la herramienta \`run_command\` tú mismo.
-2. ¡NUNCA le des al usuario instrucciones manuales de cómo editar un archivo ("Copia y pega esto en server.js")! DEBES usar la herramienta \`write_file\` tú mismo para alterar el código.
-3. El usuario te está usando para que TÚ hagas el trabajo de programación y consola, no para leer tutoriales. Actúa directamente sobre el proyecto.
-4. SIEMPRE lee un archivo antes de editarlo con \`read_file\` si existe.
-5. Explica brevemente lo que vas a hacer e INMEDIATAMENTE invoca la herramienta.
-6. ¡CRÍTICO! NO uses \`run_command\` para iniciar servidores (ej. \`node server.js\`, \`npm run dev\`, \`npm start\`). La herramienta es síncrona y bloqueará el IDE entero. Si el usuario te pide arrancar un servidor, dile amablemente que tú no puedes mantener un servidor vivo en background, y pídele que use ÉL MISMO la terminal del IDE.`;
+    system += `\n\nMODO AGENTE ACTIVADO — Aplica cambios con bloques file: y valida con pasos mínimos. Evita instrucciones manuales.`;
   } else {
-    system += `\nCuando generes código, usa bloques con el lenguaje indicado.`;
+    system += `\nCuando muestres código, usa solo los fragmentos necesarios con el lenguaje correcto.`;
   }
 
   if (rootPath) {
@@ -108,6 +120,25 @@ REGLAS ESTRICTAS E INQUEBRANTABLES:
 
 /** Get route and headers for a given provider */
 function getProviderConfig(provider: AIProvider, apiKeys: Record<string, string>) {
+  const useUnified = (window as any).__AI_UNIFIED__ === true;
+  if (useUnified) {
+    switch (provider) {
+      case 'claude':
+        return { path: '/api/ai-unified/chat', headers: { 'x-api-key': apiKeys.claude || '' } };
+      case 'openai':
+        return { path: '/api/ai-unified/chat', headers: { 'Authorization': `Bearer ${apiKeys.openai || ''}` } };
+      case 'gemini':
+        return { path: '/api/ai-unified/chat', headers: {} };
+      case 'deepseek':
+        return { path: '/api/ai-unified/chat', headers: { 'Authorization': `Bearer ${apiKeys.deepseek || ''}` } };
+      case 'nvidia':
+        return { path: '/api/ai-unified/chat', headers: { 'Authorization': `Bearer ${apiKeys.nvidia || ''}` } };
+      case 'openrouter':
+        return { path: '/api/ai-unified/chat', headers: { 'Authorization': `Bearer ${apiKeys.openrouter || ''}` } };
+      default:
+        return { path: '/api/ai-unified/chat', headers: {} };
+    }
+  }
   switch (provider) {
     case 'claude':
       return { path: '/api/ai/claude', headers: { 'x-api-key': apiKeys.claude || '' } };
@@ -398,6 +429,10 @@ async function streamAgentChat(): Promise<void> {
     apiKey: providerKey,
     maxIterations: 1000,
     githubToken: activeAccount?.token || '',
+    openFiles: Array.from(editorState.openFiles.entries()).map(([path, f]) => ({
+      path: path.replace(/\\/g, '/'),
+      content: f.content
+    })),
   };
 
   chatStore.setStreaming(true);
@@ -408,56 +443,95 @@ async function streamAgentChat(): Promise<void> {
   let fullContent = '';
 
   try {
-    const { response, abort } = api.streamAgent(body);
-    
-    // Create an abort controller that triggers the api.abort() and store it
-    const ctrl = new AbortController();
-    ctrl.signal.addEventListener('abort', () => abort());
-    chatStore.setAbortController(ctrl);
+    // Increment requests immediately so it counts even if it 504s
+    chatStore.incrementModelRequests(actualModelId);
 
-    const res = await response;
+    const wapi: any = (typeof window !== 'undefined' ? (window as any).api : null);
+    const useIpc = !!(wapi && wapi.ai && wapi.ai.start);
 
-    if (!res.ok) {
-      const errText = await res.text();
-      chatStore.addMessage({
-        id: Date.now().toString(36), role: 'assistant',
-        content: `Error ${res.status}: ${errText.slice(0, 200)}`,
-        timestamp: Date.now(), model: selectedModel,
+    if (useIpc) {
+      const session = await wapi.ai.start({
+        provider: model.provider,
+        model: apiModelId,
+        system,
+        messages: historyMessages,
+        apiKey: ((useSettingsStore.getState().apiKeys as any) || {})[model.provider] || (useSettingsStore.getState().apiKeys as any)?.openrouter || '',
+        username: (typeof window !== 'undefined' ? localStorage.getItem('codeai-user') : '') || ''
       });
-      chatStore.setStreaming(false);
-      return;
-    }
+      if (session?.error) throw new Error(session.error);
 
-    const reader = res.body?.getReader();
-    if (!reader) throw new Error('No response body');
+      const sessionId = session.sessionId;
+      const ctrl = new AbortController();
+      ctrl.signal.addEventListener('abort', () => wapi.ai.abort(sessionId));
+      chatStore.setAbortController(ctrl);
 
-    const decoder = new TextDecoder();
-    let buffer = '';
+      let lastBeat = Date.now();
+      let retried = false;
+      const stopChunk = wapi.ai.onChunk(sessionId, (text: string) => {
+        fullContent += text;
+        chatStore.setStreamContent(fullContent);
+        lastBeat = Date.now();
+      });
+      const stopError = wapi.ai.onError(sessionId, (err: string) => {
+        chatStore.addMessage({ id: Date.now().toString(36), role: 'assistant', content: `Error: ${err}`, timestamp: Date.now(), model: selectedModel });
+      });
+      const stopHb = wapi.ai.onHeartbeat(sessionId, () => { lastBeat = Date.now(); });
 
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
+      const stallTimer = setInterval(async () => {
+        if (Date.now() - lastBeat > 6000 && !retried) {
+          retried = true;
+          try { ctrl.abort(); } catch {}
+          clearInterval(stallTimer);
+          chatStore.setStreaming(false);
+          chatStore.setStreamContent('');
+          await streamAgentChat();
+        }
+      }, 1500);
+      await new Promise<void>((resolve) => {
+        const stopDone = wapi.ai.onDone(sessionId, () => { stopChunk(); stopError(); stopHb(); clearInterval(stallTimer); stopDone(); resolve(); });
+      });
+    } else {
+      const authToken = (typeof window !== 'undefined' ? localStorage.getItem('codeai-auth') : '') || '';
+      const authUser = (typeof window !== 'undefined' ? localStorage.getItem('codeai-user') : '') || '';
+      const { response, abort } = api.streamAgent(body, {
+        'x-auth-token': authToken,
+        'x-auth-user': authUser,
+      });
+      const ctrl = new AbortController();
+      ctrl.signal.addEventListener('abort', () => abort());
+      chatStore.setAbortController(ctrl);
 
-      buffer += decoder.decode(value, { stream: true });
+      const res = await response;
+      if (!res.ok) {
+        const errText = await res.text();
+        chatStore.addMessage({ id: Date.now().toString(36), role: 'assistant', content: `Error ${res.status}: ${errText.slice(0, 200)}`, timestamp: Date.now(), model: selectedModel, });
+        chatStore.setStreaming(false);
+        return;
+      }
 
-      // Parse SSE events from buffer
-      const lines = buffer.split('\n');
-      buffer = lines.pop() || ''; // keep incomplete line in buffer
+      const reader = res.body?.getReader();
+      if (!reader) throw new Error('No response body');
 
-      let currentEvent = '';
-      for (const line of lines) {
-        if (line.startsWith('event: ')) {
-          currentEvent = line.slice(7).trim();
-        } else if (line.startsWith('data: ')) {
-          const dataStr = line.slice(6);
-          try {
-            const data = JSON.parse(dataStr);
-            handleAgentEvent(currentEvent, data, toolCalls, agentChanges, (text) => {
-              fullContent += text;
-              chatStore.setStreamContent(fullContent);
-            });
-          } catch {
-            // skip malformed JSON
+      const decoder = new TextDecoder();
+      let buffer = '';
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+        let currentEvent = '';
+        for (const line of lines) {
+          if (line.startsWith('event: ')) currentEvent = line.slice(7).trim();
+          else if (line.startsWith('data: ')) {
+            const dataStr = line.slice(6);
+            try {
+              const data = JSON.parse(dataStr);
+              handleAgentEvent(currentEvent, data, toolCalls, agentChanges, (text) => {
+                fullContent += text;
+                chatStore.setStreamContent(fullContent);
+              });
+            } catch {}
           }
         }
       }
@@ -465,12 +539,12 @@ async function streamAgentChat(): Promise<void> {
 
     // Build the final assistant message with tool call info
     let finalContent = fullContent || '(sin respuesta)';
-    if (toolCalls.length > 0) {
+    const silent = useChatStore.getState().silentMode;
+    if (!silent && toolCalls.length > 0) {
       const toolSummary = toolCalls.map((tc) => {
         const icon = tc.name === 'read_file' ? '📖' : tc.name === 'write_file' ? '✏️' : tc.name === 'list_files' ? '📁' : tc.name === 'search_files' ? '🔍' : '⚡';
         return `${icon} \`${tc.name}\`(${formatToolArgs(tc.args)})`;
       }).join('\n');
-
       finalContent = `**Herramientas usadas:**\n${toolSummary}\n\n---\n\n${finalContent}`;
     }
 
@@ -498,6 +572,7 @@ async function streamAgentChat(): Promise<void> {
   } finally {
     chatStore.setStreaming(false);
     chatStore.setStreamContent('');
+    chatStore.setAgentStatus(null);
     chatStore.setAbortController(null);
   }
 }
@@ -512,7 +587,7 @@ function handleAgentEvent(
   switch (event) {
     case 'status':
       if (data.type === 'thinking') {
-        appendContent(`🤔 *Analizando paso...*\n\n`);
+        useChatStore.getState().setAgentStatus('Razonando respuesta...');
       }
       break;
 
@@ -524,8 +599,11 @@ function handleAgentEvent(
         status: 'running',
       });
       {
-        const icon = data.name === 'read_file' ? '📖' : data.name === 'write_file' ? '✏️' : data.name === 'list_files' ? '📁' : data.name === 'search_files' ? '🔍' : '⚡';
-        appendContent(`${icon} Ejecutando \`${data.name}\`(${formatToolArgs(data.args)})...\n`);
+        const silent = useChatStore.getState().silentMode;
+        if (!silent) {
+          const icon = data.name === 'read_file' ? '📖' : data.name === 'write_file' ? '✏️' : data.name === 'list_files' ? '📁' : data.name === 'search_files' ? '🔍' : '⚡';
+          appendContent(`${icon} Ejecutando \`${data.name}\`(${formatToolArgs(data.args)})...\n`);
+        }
       }
       break;
 
@@ -535,7 +613,10 @@ function handleAgentEvent(
         tc.status = 'done';
         tc.result = data.result;
       }
-      appendContent(`✅ Resultado recibido\n\n`);
+      {
+        const silent = useChatStore.getState().silentMode;
+        if (!silent) appendContent(`✅ Resultado recibido\n\n`);
+      }
       break;
     }
 
@@ -544,8 +625,10 @@ function handleAgentEvent(
       if (tc) {
         tc.fileChange = { path: data.path, content: data.content };
       }
-      
+
       const editorStore = useEditorStore.getState();
+      const rootPath = editorStore.rootPath;
+      const autoApply = useChatStore.getState().autoApply;
       const existing = editorStore.openFiles.get(data.path);
       const originalContent = data.oldContent || '';
 
@@ -554,8 +637,8 @@ function handleAgentEvent(
         oldContent: originalContent,
         newContent: data.content,
       });
-      
-      // Asegurarse de que el archivo esté abierto con su contenido original antes de previsualizar
+
+      // Ensure file is open with original content (helps diff and UI refresh)
       if (!existing) {
         editorStore.openFile(data.path, {
           path: data.path,
@@ -566,18 +649,53 @@ function handleAgentEvent(
       }
 
       const changeId = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
-      editorStore.addPendingChange({
-        id: changeId,
-        type: 'replace',
-        file: data.path,
-        content: data.content,
-        original: originalContent,
-        status: 'pending',
-      });
-      
-      editorStore.applyPreview(data.path, originalContent, data.content, changeId);
 
-      appendContent(`📝 Archivo modificado: \`${data.path}\`\n`);
+      if (autoApply && rootPath) {
+        // Write directly to disk and update editor state
+        (async () => {
+          try {
+            await api.writeFile({ path: data.path, content: data.content, root: rootPath });
+            // reflect accepted change in UI
+            editorStore.updateFileContent(data.path, data.content);
+            editorStore.markFileSaved(data.path);
+            editorStore.addPendingChange({
+              id: changeId,
+              type: 'replace',
+              file: data.path,
+              content: data.content,
+              original: originalContent,
+              status: 'accepted',
+            });
+          } catch (e) {
+            // Fallback to preview if write fails
+            editorStore.addPendingChange({
+              id: changeId,
+              type: 'replace',
+              file: data.path,
+              content: data.content,
+              original: originalContent,
+              status: 'pending',
+            });
+            editorStore.applyPreview(data.path, originalContent, data.content, changeId);
+          }
+        })();
+      } else {
+        // Preview-only path (no auto-apply or missing root)
+        editorStore.addPendingChange({
+          id: changeId,
+          type: 'replace',
+          file: data.path,
+          content: data.content,
+          original: originalContent,
+          status: 'pending',
+        });
+        editorStore.applyPreview(data.path, originalContent, data.content, changeId);
+      }
+
+      {
+        const silent = useChatStore.getState().silentMode;
+        if (!silent) appendContent(`📝 Archivo modificado: \`${data.path}\`\n`);
+      }
       break;
     }
 
@@ -649,6 +767,9 @@ async function streamDirectChat(): Promise<void> {
   const apiKeys = settingsStore.apiKeys as unknown as Record<string, string>;
   const provider = model.provider;
   const { path, headers } = getProviderConfig(provider, apiKeys);
+  const authToken = (typeof window !== 'undefined' ? localStorage.getItem('codeai-auth') : '') || '';
+  const authUser = (typeof window !== 'undefined' ? localStorage.getItem('codeai-user') : '') || '';
+  const mergedHeaders = { ...(headers as Record<string, string>), 'x-auth-token': authToken, 'x-auth-user': authUser };
 
   const session = sessions.find((s) => s.id === activeSessionId);
   const historyMessages = (session?.messages ?? [])
@@ -656,13 +777,21 @@ async function streamDirectChat(): Promise<void> {
     .slice(-20)
     .map((m: any) => ({ role: m.role, content: m.content, attachments: m.attachments, reasoning_content: m.reasoning_content }));
 
-  const body = buildRequestBody(provider, actualModelId, historyMessages, system);
+  let body = buildRequestBody(provider, actualModelId, historyMessages, system);
+  if (path === '/api/ai-unified/chat') {
+    if (provider === 'gemini') {
+      const g = body as any;
+      body = { provider, model: g.model, apiKey: g.apiKey, body: g.body } as any;
+    } else {
+      body = { provider, ...body } as any;
+    }
+  }
 
   chatStore.setStreaming(true);
   chatStore.setStreamContent('');
 
   try {
-    const { response } = api.streamAI(path, body, headers as Record<string, string>);
+    const { response } = api.streamAI(path, body, mergedHeaders);
     const res = await response;
 
     if (!res.ok) {

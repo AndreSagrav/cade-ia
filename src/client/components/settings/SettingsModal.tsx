@@ -126,7 +126,13 @@ function APIKeysTab() {
 }
 
 function GitHubAccountsSection() {
-  const { githubAccounts, activeGithubAccount, addGithubAccount, removeGithubAccount, setActiveGithubAccount } = useSettingsStore();
+  const settingsStore = useSettingsStore();
+  const githubAccounts = settingsStore.githubAccounts || [];
+  const activeGithubAccount = settingsStore.activeGithubAccount;
+  const addGithubAccount = settingsStore.addGithubAccount;
+  const removeGithubAccount = settingsStore.removeGithubAccount;
+  const setActiveGithubAccount = settingsStore.setActiveGithubAccount;
+  
   const [newToken, setNewToken] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');

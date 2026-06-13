@@ -14,8 +14,9 @@ export function useProject() {
 
   /** Open folder using File System Access API (browser) or fallback to visual picker */
   const handleOpenFolder = useCallback(async () => {
-    // Try File System Access API first (works in Chromium-based browsers)
-    if ('showDirectoryPicker' in window) {
+    const isElectron = typeof navigator !== 'undefined' && /Electron/i.test(navigator.userAgent);
+    // In Electron we can't get a real path from showDirectoryPicker; use picker dialog
+    if ('showDirectoryPicker' in window && !isElectron) {
       try {
         const handle = await (window as any).showDirectoryPicker({ mode: 'readwrite' });
         const name = handle.name;
@@ -23,9 +24,12 @@ export function useProject() {
 
         // Resolve the actual path via backend
         const resolved = await api.resolveFolder(name);
+        if ((resolved as any).guessed) {
+          setFolderPickerOpen(true);
+          return;
+        }
         setRootPath(resolved.path);
 
-        // Load file tree
         const treeResult = await api.getTree({ root: resolved.path });
         setFileTree(treeResult.items as FileEntry[]);
       } catch (e: any) {
@@ -41,6 +45,10 @@ export function useProject() {
   const handleFolderSelected = useCallback(async (path: string) => {
     try {
       const resolved = await api.resolveFolder(path);
+      if ((resolved as any).guessed) {
+        setFolderPickerOpen(true);
+        return;
+      }
       setRootPath(resolved.path);
       const treeResult = await api.getTree({ root: resolved.path });
       setFileTree(treeResult.items as FileEntry[]);
@@ -52,9 +60,25 @@ export function useProject() {
   /** Refresh current file tree */
   const handleRefreshTree = useCallback(async () => {
     if (!rootPath) return;
-    const treeResult = await api.getTree({ root: rootPath });
+    const looksAbsolute = /^(?:[a-zA-Z]:\\|\\\\|\/)/.test(rootPath);
+    let effectiveRoot = rootPath;
+    if (!looksAbsolute) {
+      try {
+        const resolved = await api.resolveFolder(rootPath);
+        if ((resolved as any).guessed) {
+          setFolderPickerOpen(true);
+          return;
+        }
+        effectiveRoot = (resolved as any).path;
+        setRootPath(effectiveRoot);
+      } catch (e) {
+        setFolderPickerOpen(true);
+        return;
+      }
+    }
+    const treeResult = await api.getTree({ root: effectiveRoot });
     setFileTree(treeResult.items as FileEntry[]);
-  }, [rootPath, setFileTree]);
+  }, [rootPath, setFileTree, setFolderPickerOpen, setRootPath]);
 
   /** Open a file for editing */
   const handleOpenFile = useCallback(async (relativePath: string) => {
@@ -87,7 +111,22 @@ export function useProject() {
     if (!file || !file.modified) return;
 
     try {
-      await api.writeFile({ path: activeFilePath, content: file.content, root: rootPath });
+      const { rootHandle } = useEditorStore.getState();
+      if (rootHandle) {
+        // Escribir directamente al disco local del usuario usando el API Nativo
+        const parts = activeFilePath.replace(/\\/g, '/').split('/');
+        let currentDir = rootHandle as any;
+        for (let i = 0; i < parts.length - 1; i++) {
+          currentDir = await currentDir.getDirectoryHandle(parts[i], { create: true });
+        }
+        const fileHandle = await currentDir.getFileHandle(parts[parts.length - 1], { create: true });
+        const writable = await fileHandle.createWritable();
+        await writable.write(file.content);
+        await writable.close();
+      } else {
+        // Fallback: enviar al backend
+        await api.writeFile({ path: activeFilePath, content: file.content, root: rootPath });
+      }
       markFileSaved(activeFilePath);
     } catch (e: any) {
       console.error('Failed to save file:', e.message);

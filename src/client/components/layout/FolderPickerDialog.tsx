@@ -14,11 +14,26 @@ export function FolderPickerDialog({ open, onClose, onSelect }: FolderPickerDial
   const [parentPath, setParentPath] = useState<string | null>(null);
   const [items, setItems] = useState<{ name: string; path: string }[]>([]);
   const [loading, setLoading] = useState(false);
+  const [pathInput, setPathInput] = useState<string>('');
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (open) {
-      loadDirectory(null);
+      const last = (typeof window !== 'undefined' ? window.localStorage.getItem('codeai-last-root') : null);
+      if (last) {
+        loadDirectory(last);
+      } else {
+        (async () => {
+          try {
+            const guess = await api.resolveFolder('PROYECTOS');
+            if (guess && (guess as any).path && !(guess as any).guessed) {
+              loadDirectory((guess as any).path);
+              return;
+            }
+          } catch {}
+          loadDirectory(null);
+        })();
+      }
     } else {
       setCurrentPath(null);
       setItems([]);
@@ -33,7 +48,9 @@ export function FolderPickerDialog({ open, onClose, onSelect }: FolderPickerDial
       if (res.ok) {
         setItems(res.items);
         setParentPath(res.parent);
-        setCurrentPath(res.current || null);
+        const curr = res.current || path || null;
+        setCurrentPath(curr);
+        setPathInput(curr || '');
       }
     } catch (err: any) {
       setError(err.message || 'Failed to load directory');
@@ -44,6 +61,7 @@ export function FolderPickerDialog({ open, onClose, onSelect }: FolderPickerDial
 
   const handleSelect = () => {
     if (currentPath) {
+      try { if (typeof window !== 'undefined') window.localStorage.setItem('codeai-last-root', currentPath); } catch {}
       onSelect(currentPath);
       onClose();
     }
@@ -71,9 +89,20 @@ export function FolderPickerDialog({ open, onClose, onSelect }: FolderPickerDial
             >
               <ArrowUp className="w-4 h-4" />
             </button>
-            <div className="text-sm px-2 truncate flex-1 font-mono text-muted-foreground bg-background rounded border p-1">
-              {currentPath || 'Este equipo'}
-            </div>
+            <input
+              className="text-sm flex-1 font-mono bg-background rounded border px-2 py-1 outline-none"
+              placeholder="Pega una ruta (p.ej. C:\\Users\\TuUsuario\\OneDrive\\Documentos\\PROYECTOS)"
+              value={pathInput}
+              onChange={(e) => setPathInput(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter' && pathInput && !loading) loadDirectory(pathInput); }}
+            />
+            <button
+              className="px-2 py-1 text-xs font-medium bg-primary text-primary-foreground rounded-md hover:bg-primary/90"
+              disabled={!pathInput || loading}
+              onClick={() => loadDirectory(pathInput)}
+            >
+              Ir
+            </button>
           </div>
 
           <div className="flex-1 overflow-y-auto p-2 min-h-[300px]">

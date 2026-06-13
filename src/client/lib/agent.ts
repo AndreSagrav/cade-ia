@@ -114,22 +114,23 @@ export async function processAgentResponse(content: string): Promise<void> {
   if (changes.length === 0) return;
 
   const store = useEditorStore.getState();
+  const chat = useChatStore.getState();
   const rootPath = store.rootPath;
 
   for (const change of changes) {
-    store.addPendingChange(change);
-
-    if (change.type === 'replace' && change.file && rootPath) {
+    if (change.type === 'replace' && change.file) {
       // Fetch current content (or empty if new file)
       let original = '';
-      try {
-        const res = await api.readFile({ path: change.file, root: rootPath });
-        if (res.ok) original = res.content;
-      } catch {
-        // file doesn't exist yet → empty original (new file)
+      if (rootPath) {
+        try {
+          const res = await api.readFile({ path: change.file, root: rootPath });
+          if (res.ok) original = res.content;
+        } catch {
+          // file doesn't exist yet → empty original (new file)
+        }
       }
 
-      // Make sure the file is opened in editor with preview content
+      // Ensure the file is open in the editor
       const openFiles = useEditorStore.getState().openFiles;
       if (!openFiles.has(change.file)) {
         useEditorStore.getState().openFile(change.file, {
@@ -140,12 +141,65 @@ export async function processAgentResponse(content: string): Promise<void> {
         });
       }
 
-      useEditorStore.getState().applyPreview(
-        change.file,
+      const id = change.id;
+      if (chat.autoApply && rootPath) {
+        try {
+          await api.writeFile({ path: change.file, content: change.content, root: rootPath });
+          // Update editor state to reflect saved changes
+          useEditorStore.getState().updateFileContent(change.file, change.content);
+          useEditorStore.getState().markFileSaved(change.file);
+          useEditorStore.getState().addPendingChange({
+            id,
+            type: 'replace',
+            file: change.file,
+            content: change.content,
+            original,
+            status: 'accepted',
+          });
+          continue; // done for this change
+        } catch {
+          // fall through to preview path if write fails
+        }
+      }
+
+      // Preview path (no auto-apply or write failed)
+      useEditorStore.getState().addPendingChange({
+        id,
+        type: 'replace',
+        file: change.file,
+        content: change.content,
         original,
-        change.content,
-        change.id,
-      );
+        status: 'pending',
+      });
+      useEditorStore.getState().applyPreview(change.file, original, change.content, id);
+    } else if (change.type === 'run') {
+      if (chat.autoRun && rootPath) {
+        // Execute immediately via IPC if available, else HTTP fallback
+        const wapi: any = (typeof window !== 'undefined' ? (window as any).api : null);
+        const useIpc = !!(wapi && wapi.shell && wapi.shell.run);
+        (async () => {
+          try {
+            if (useIpc) {
+              // Parse simple shell commands for IPC (single command + args)
+              const cmd = change.content;
+              const isWin = navigator.platform.startsWith('Win');
+              const shell = isWin ? 'powershell.exe' : (process.env?.SHELL || 'bash');
+              const args = isWin ? ['-NoProfile','-NonInteractive','-Command', cmd] : ['-c', cmd];
+              await wapi.shell.run(shell, args, rootPath, undefined, 120000);
+            } else {
+              await api.runCommand({ cmd: change.content, cwd: rootPath });
+            }
+            store.addPendingChange({ ...change, status: 'accepted' });
+            store.updateChangeStatus(change.id, 'accepted');
+          } catch (e: any) {
+            store.addPendingChange({ ...change, status: 'rejected' });
+            store.updateChangeStatus(change.id, 'rejected');
+          }
+        })();
+      } else {
+        // Keep pending for manual confirmation
+        store.addPendingChange(change);
+      }
     }
   }
 }
