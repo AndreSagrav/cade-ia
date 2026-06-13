@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { Send, Bot, Sparkles, Zap, Plus, X, History, MessageSquare, Trash2, Mic, GitBranch, Undo2, Loader2 } from 'lucide-react';
+import { Send, Bot, Sparkles, Plus, X, History, MessageSquare, Trash2, Mic, GitBranch, Undo2, Loader2, VolumeX, Check, CloudUpload, Play, MoreVertical } from 'lucide-react';
 import { ModelSelector } from './ModelSelector';
 import { useChatStore } from '@/store/chat-store';
 import { AI_MODELS } from '@shared/models';
@@ -11,9 +11,21 @@ import type { Attachment } from '@shared/types';
 export function ChatPanel() {
   const [input, setInput] = useState('');
   const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [moreOpen, setMoreOpen] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const moreRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (moreRef.current && !moreRef.current.contains(e.target as Node)) {
+        setMoreOpen(false);
+      }
+    };
+    if (moreOpen) document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [moreOpen]);
 
   const {
     sessions, openSessionIds, activeSessionId, historyOpen,
@@ -167,66 +179,75 @@ export function ChatPanel() {
           >
             <History size={13} />
           </button>
+          {/* Icon toggles — premium minimal */}
           <button
             onClick={() => setSilentMode(!silentMode)}
             className={cn(
-              'flex items-center gap-1 rounded-full px-2 py-1 text-[10px] font-semibold transition-all',
-              silentMode ? 'text-foreground' : 'text-muted-foreground hover:text-foreground',
+              'flex h-7 w-7 items-center justify-center rounded-md transition-all',
+              silentMode ? 'bg-muted/70 text-foreground' : 'text-muted-foreground hover:bg-muted/50 hover:text-foreground',
             )}
-            style={{
-              background: silentMode ? 'hsl(var(--muted) / 0.7)' : 'hsl(var(--muted) / 0.5)',
-              border: '1px solid hsl(var(--border))',
-            }}
             title="Silencio del chat"
           >
-            Silencio
+            <VolumeX size={14} />
           </button>
           <button
             onClick={() => setAutoApply(!autoApply)}
             className={cn(
-              'flex items-center gap-1 rounded-full px-2 py-1 text-[10px] font-semibold transition-all',
-              autoApply ? 'text-foreground' : 'text-muted-foreground hover:text-foreground',
+              'flex h-7 w-7 items-center justify-center rounded-md transition-all',
+              autoApply ? 'bg-muted/70 text-foreground' : 'text-muted-foreground hover:bg-muted/50 hover:text-foreground',
             )}
-            style={{
-              background: autoApply ? 'hsl(var(--muted) / 0.7)' : 'hsl(var(--muted) / 0.5)',
-              border: '1px solid hsl(var(--border))',
-            }}
-            title="Aplicación automática de cambios"
+            title="Auto-aplicar cambios"
           >
-            Auto
-          </button>
-          <button
-            onClick={() => setAutoRun(!autoRun)}
-            className={cn(
-              'flex items-center gap-1 rounded-full px-2 py-1 text-[10px] font-semibold transition-all',
-              autoRun ? 'text-warning' : 'text-muted-foreground hover:text-foreground',
-            )}
-            style={{
-              background: autoRun ? 'hsl(var(--warning) / 0.12)' : 'hsl(var(--muted) / 0.5)',
-              border: autoRun ? '1px solid hsl(var(--warning) / 0.3)' : '1px solid hsl(var(--border))',
-            }}
-            title="Ejecuta comandos del agente sin confirmar"
-          >
-            Autorun
+            <Check size={14} />
           </button>
           <button
             onClick={() => setAutoSync(!autoSync)}
             className={cn(
-              'flex items-center gap-1 rounded-full px-2 py-1 text-[10px] font-semibold transition-all',
-              autoSync ? 'text-accent' : 'text-muted-foreground hover:text-foreground',
+              'flex h-7 w-7 items-center justify-center rounded-md transition-all',
+              autoSync ? 'bg-accent/10 text-accent' : 'text-muted-foreground hover:bg-muted/50 hover:text-foreground',
             )}
-            style={{
-              background: autoSync ? 'hsl(var(--accent) / 0.12)' : 'hsl(var(--muted) / 0.5)',
-              border: autoSync ? '1px solid hsl(var(--accent) / 0.3)' : '1px solid hsl(var(--border))',
-            }}
-            title="Sync: auto git add/commit/push después de cambios"
+            title="Sync: auto git add/commit/push"
           >
-            Sync
+            <CloudUpload size={14} />
           </button>
+
+          {/* More menu — secondary toggles */}
+          <div className="relative" ref={moreRef}>
+            <button
+              onClick={() => setMoreOpen(!moreOpen)}
+              className={cn(
+                'flex h-7 w-7 items-center justify-center rounded-md transition-all',
+                moreOpen ? 'bg-muted/70 text-foreground' : 'text-muted-foreground hover:bg-muted/50 hover:text-foreground',
+              )}
+              title="Más opciones"
+            >
+              <MoreVertical size={14} />
+            </button>
+            {moreOpen && (
+              <div
+                className="absolute right-0 top-9 z-50 flex flex-col gap-0.5 rounded-lg border p-1 shadow-lg"
+                style={{ background: 'hsl(var(--background))', borderColor: 'hsl(var(--border))', minWidth: '148px' }}
+              >
+                <button
+                  onClick={() => { setAutoRun(!autoRun); setMoreOpen(false); }}
+                  className={cn(
+                    'flex items-center gap-2 rounded-md px-2.5 py-1.5 text-[11px] font-medium transition-colors',
+                    autoRun ? 'text-warning' : 'text-muted-foreground hover:text-foreground',
+                  )}
+                  style={{ background: autoRun ? 'hsl(var(--warning) / 0.08)' : 'transparent' }}
+                >
+                  <Play size={12} />
+                  Autorun
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* Primary mode toggle */}
           <button
             onClick={() => setAgentMode(!agentMode)}
             className={cn(
-              'flex items-center gap-1 rounded-full px-2 py-1 text-[10px] font-semibold transition-all',
+              'flex items-center gap-1 rounded-full px-2.5 py-1 text-[10px] font-semibold transition-all',
               agentMode ? 'text-warning' : 'text-muted-foreground hover:text-foreground',
             )}
             style={{
@@ -235,7 +256,7 @@ export function ChatPanel() {
             }}
             title="Modo agente"
           >
-            <Zap size={9} /> Agente
+            <Bot size={11} /> Agente
           </button>
         </div>
       </div>
