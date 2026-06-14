@@ -548,7 +548,7 @@ function openaiAdapter(endpoint: string, extra?: Record<string, string>): Provid
         model,
         messages: [{ role: 'system', content: system }, ...formattedMessages],
         tools: TOOL_DEFS.map((t) => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.parameters } })),
-        max_tokens: 8192,
+        max_tokens: 4096,
       };
     },
     getEndpoint() { return endpoint; },
@@ -607,7 +607,7 @@ const claudeAdapter: ProviderAdapter = {
       system,
       messages: formattedMessages,
       tools: TOOL_DEFS.map((t) => ({ name: t.name, description: t.description, input_schema: t.parameters })),
-      max_tokens: 8192,
+      max_tokens: 4096,
     };
   },
   getEndpoint() { return 'https://api.anthropic.com/v1/messages'; },
@@ -1038,6 +1038,13 @@ agentRouter.post('/', async (req: Request, res: Response) => {
               sendEvent('status', { type: 'self_healing_failed', iteration, message: `${tc.name} agotó reintentos.` });
             }
           }
+        }
+
+        // To prevent open-source template engines (like Mistral on vLLM/NIM) from crashing 
+        // with "Cannot set add_generation_prompt to True when the last message is from the assistant",
+        // we add a user message at the end of the tool sequence to force a new user turn.
+        if (provider !== 'claude' && provider !== 'gemini' && conversationMessages[conversationMessages.length - 1]?.role !== 'user') {
+          conversationMessages.push({ role: 'user', content: 'Herramientas ejecutadas. Continúa con el plan o proporciona el resultado final al usuario.' });
         }
 
         // Continue the loop — the AI will see the tool results
