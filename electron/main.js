@@ -658,6 +658,7 @@ ipcMain.handle('shell:open-external', async (_e, { url }) => {
 });
 
 // ── Updater IPC ───────────────────────────────────────────────────
+try { ipcMain.removeHandler('updates:check'); } catch {}
 ipcMain.handle('updates:check', async () => {
   if (!AutoUpdaterRef) return { available: false, error: 'Updater not available' };
   try {
@@ -671,6 +672,7 @@ ipcMain.handle('updates:check', async () => {
   }
 });
 
+try { ipcMain.removeHandler('updates:install'); } catch {}
 ipcMain.handle('updates:install', async () => {
   if (!AutoUpdaterRef) return { error: 'Updater not available' };
   try {

@@ -8,3 +8,10 @@ dist-electron/
 Thumbs.db
 coverage/
 .vite/
+# tsc emit artifacts alongside sources (should go to dist / dist-server only)
+src/**/*.js
+src/**/*.js.map
+electron/**/*.js
+electron/**/*.js.map
+!electron/main.js
+!electron/preload.js
