@@ -7,6 +7,10 @@ import { cn } from '@/lib/utils';
 import { streamChat } from '@/lib/ai-stream';
 import { rewindToMessage } from '@/lib/agent';
 import type { Attachment } from '@shared/types';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import rehypeHighlight from 'rehype-highlight';
+import 'highlight.js/styles/atom-one-dark.css';
 
 export function ChatPanel() {
   const [input, setInput] = useState('');
@@ -1040,16 +1044,36 @@ function MessageBubble({ message, isLast }: { message: any; isLast: boolean }) {
           </div>
         )}
         {prose && (
-          <div style={{ color: 'hsl(var(--foreground))' }}>
+          <div style={{ color: 'hsl(var(--foreground))' }} className="markdown-body">
             {parseContentSegments(prose).map((seg, i) =>
               seg.type === 'terminal' ? (
                 <TerminalBlock key={i} content={seg.content} />
               ) : (
-                <div
-                  key={i}
-                  className="text-[13px] leading-relaxed whitespace-pre-wrap"
-                >
-                  {seg.content}
+                <div key={i} className="text-[13px] leading-relaxed">
+                  <ReactMarkdown 
+                    remarkPlugins={[remarkGfm]} 
+                    rehypePlugins={[rehypeHighlight]}
+                    components={{
+                      a: ({node, ...props}) => <a {...props} className="text-blue-400 hover:underline cursor-pointer" target="_blank" rel="noreferrer" />,
+                      p: ({node, ...props}) => <p {...props} className="mb-2 last:mb-0" />,
+                      ul: ({node, ...props}) => <ul {...props} className="list-disc pl-4 mb-2" />,
+                      ol: ({node, ...props}) => <ol {...props} className="list-decimal pl-4 mb-2" />,
+                      li: ({node, ...props}) => <li {...props} className="mb-1" />,
+                      code: ({node, inline, className, children, ...props}: any) => {
+                        return !inline ? (
+                          <code className={className} {...props}>
+                            {children}
+                          </code>
+                        ) : (
+                          <code className="bg-muted px-1 py-0.5 rounded text-sm text-[12px]" {...props}>
+                            {children}
+                          </code>
+                        );
+                      }
+                    }}
+                  >
+                    {seg.content}
+                  </ReactMarkdown>
                 </div>
               )
             )}

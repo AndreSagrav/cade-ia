@@ -56,6 +56,9 @@ async function findAvailablePort(preferred) {
 }
 
 async function startServer() {
+  // In production we use IPC; nothing to do here.
+  if (!isDev) return;
+
   const desired = Number(process.env.ELECTRON_SERVER_PORT || process.env.PORT || 3001);
   SERVER_PORT = await findAvailablePort([desired, 3002, 3003, 3004]);
 
@@ -74,7 +77,7 @@ async function startServer() {
   });
 }
 
-function createWindow() {
+async function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1400,
     height: 900,
@@ -96,9 +99,8 @@ function createWindow() {
     mainWindow.loadURL(`http://localhost:${devPort}`);
     mainWindow.webContents.openDevTools({ mode: 'detach' });
   } else {
-    // Load from local server so API calls use HTTP (avoids IPC DNS issues)
-    await new Promise(r => setTimeout(r, 800)); // give server time to start
-    mainWindow.loadURL(`http://localhost:${SERVER_PORT}`);
+    // Load built static files
+    mainWindow.loadFile(join(__dirname, '..', 'dist', 'index.html'));
   }
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
@@ -112,8 +114,8 @@ function createWindow() {
 }
 
 app.whenReady().then(async () => {
-  startServer();
-  createWindow();
+  await startServer();
+  await createWindow();
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();

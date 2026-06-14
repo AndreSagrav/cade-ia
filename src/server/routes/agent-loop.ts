@@ -15,18 +15,20 @@ export const agentRouter = Router();
 const TOOL_DEFS = [
   {
     name: 'read_file',
-    description: 'Read the full contents of a file from the project. Use this when you need to see what a file contains before answering or making changes.',
+    description: 'Read the contents of a file from the project. You can specify start_line and end_line to read specific sections to save tokens.',
     parameters: {
       type: 'object' as const,
       properties: {
         path: { type: 'string', description: 'Relative file path from the project root, e.g. "src/index.ts"' },
+        start_line: { type: 'number', description: 'Optional starting line number (1-indexed)' },
+        end_line: { type: 'number', description: 'Optional ending line number' },
       },
       required: ['path'],
     },
   },
   {
     name: 'write_file',
-    description: 'Create or overwrite a file with new content. Always write the COMPLETE file content.',
+    description: 'Create or overwrite a file with new content. Always write the COMPLETE file content. DO NOT use this for large files, use edit_file instead.',
     parameters: {
       type: 'object' as const,
       properties: {
@@ -34,6 +36,19 @@ const TOOL_DEFS = [
         content: { type: 'string', description: 'Complete file content to write' },
       },
       required: ['path', 'content'],
+    },
+  },
+  {
+    name: 'edit_file',
+    description: 'Replace a specific section of a file without rewriting the whole file. Use this for editing existing files.',
+    parameters: {
+      type: 'object' as const,
+      properties: {
+        path: { type: 'string', description: 'Relative file path from the project root' },
+        target_content: { type: 'string', description: 'The exact string to be replaced, including leading whitespace.' },
+        replacement_content: { type: 'string', description: 'The new content to insert in place of the target_content.' },
+      },
+      required: ['path', 'target_content', 'replacement_content'],
     },
   },
   {
@@ -50,11 +65,12 @@ const TOOL_DEFS = [
   },
   {
     name: 'search_files',
-    description: 'Search for a text string across all files in the project. Returns matching lines with file names and line numbers.',
+    description: 'Search for a text string or regular expression across all files in the project. Returns matching lines with file names and line numbers.',
     parameters: {
       type: 'object' as const,
       properties: {
-        query: { type: 'string', description: 'Text to search for (case-insensitive)' },
+        query: { type: 'string', description: 'Text or regular expression to search for' },
+        isRegex: { type: 'boolean', description: 'If true, treats query as a regular expression' },
         file_pattern: { type: 'string', description: 'File extension filter, e.g. "*.ts" (optional)' },
       },
       required: ['query'],
@@ -154,7 +170,7 @@ async function executeTool(
 
         const cacheKey = p;
         const cached = (global as any).__codeai_read_cache__ as Map<string, string> | undefined;
-        if (cached?.has(cacheKey)) {
+        if (cached?.has(cacheKey) && args.start_line === undefined && args.end_line === undefined) {
           return { result: cached.get(cacheKey)! };
         }
 
@@ -175,13 +191,21 @@ async function executeTool(
           content = readFileSync(p, 'utf-8');
         }
 
+        // Apply line slicing if requested
+        if (args.start_line !== undefined || args.end_line !== undefined) {
+           const lines = content.split('\n');
+           const start = Math.max(0, (args.start_line as number || 1) - 1);
+           const end = Math.min(lines.length, (args.end_line as number || lines.length));
+           content = lines.slice(start, end).join('\n');
+        }
+
         // Cap at 60k chars to avoid token overflow
         if (content.length > 60000) {
           content = content.slice(0, 60000) + '\n\n... (truncado, archivo muy grande)';
         }
 
         // Cache the result
-        if (cached) cached.set(cacheKey, content);
+        if (cached && args.start_line === undefined && args.end_line === undefined) cached.set(cacheKey, content);
 
         return { result: content };
       }
@@ -203,6 +227,31 @@ async function executeTool(
         };
       }
 
+      case 'edit_file': {
+        const p = safePath(projectRoot, args.path as string);
+        if (!p) return { result: 'Error: ruta no permitida' };
+        if (!existsSync(p)) return { result: `Error: archivo no encontrado: ${args.path}` };
+        
+        const oldContent = readFileSync(p, 'utf-8');
+        const target = args.target_content as string;
+        const repl = args.replacement_content as string;
+        
+        if (!oldContent.includes(target)) {
+           return { result: 'Error: el target_content no se encontró en el archivo exactamente como lo mandaste. Asegúrate de incluir los espacios en blanco correctamente.' };
+        }
+        if (oldContent.indexOf(target) !== oldContent.lastIndexOf(target)) {
+           return { result: 'Error: el target_content aparece múltiples veces en el archivo, sé más específico para evitar reemplazar el equivocado.' };
+        }
+        
+        const content = oldContent.replace(target, repl);
+        writeFileSync(p, content, 'utf-8');
+        
+        return {
+          result: `✅ Archivo editado: ${args.path} (${content.length} chars)`,
+          fileChange: { path: args.path as string, content, oldContent },
+        };
+      }
+
       case 'list_files': {
         const p = safePath(projectRoot, (args.path as string) || '.');
         if (!p) return { result: 'Error: ruta no permitida' };
@@ -213,9 +262,10 @@ async function executeTool(
       }
 
       case 'search_files': {
-        const query = (args.query as string).toLowerCase();
+        const query = args.query as string;
+        const isRegex = !!args.isRegex;
         const pattern = args.file_pattern as string | undefined;
-        const results = searchInFiles(projectRoot, query, pattern);
+        const results = searchInFiles(projectRoot, query, pattern, 0, isRegex);
         if (results.length === 0) return { result: `No se encontraron coincidencias para "${args.query}"` };
         return { result: results.slice(0, 50).join('\n') };
       }
@@ -417,9 +467,17 @@ function formatSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
 }
 
-function searchInFiles(dir: string, query: string, pattern?: string, depth = 0): string[] {
+function searchInFiles(dir: string, query: string, pattern?: string, depth = 0, isRegex = false): string[] {
   if (depth > 4 || !existsSync(dir)) return [];
   const results: string[] = [];
+  
+  let regex: RegExp | null = null;
+  if (isRegex) {
+    try { regex = new RegExp(query, 'i'); } catch { regex = new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'); }
+  } else {
+    query = query.toLowerCase();
+  }
+
   try {
     const entries = readdirSync(dir, { withFileTypes: true });
     for (const entry of entries) {
@@ -428,7 +486,7 @@ function searchInFiles(dir: string, query: string, pattern?: string, depth = 0):
       const fullPath = join(dir, entry.name);
 
       if (entry.isDirectory()) {
-        results.push(...searchInFiles(fullPath, query, pattern, depth + 1));
+        results.push(...searchInFiles(fullPath, query, pattern, depth + 1, isRegex));
       } else {
         // Check file pattern
         if (pattern) {
@@ -443,9 +501,11 @@ function searchInFiles(dir: string, query: string, pattern?: string, depth = 0):
           const content = readFileSync(fullPath, 'utf-8');
           const lines = content.split('\n');
           for (let i = 0; i < lines.length && results.length < 50; i++) {
-            if (lines[i].toLowerCase().includes(query)) {
+            const line = lines[i];
+            const match = isRegex && regex ? regex.test(line) : line.toLowerCase().includes(query);
+            if (match) {
               const relPath = fullPath.replace(dir.length === fullPath.length ? dir : dir + (dir.endsWith('/') || dir.endsWith('\\') ? '' : '/'), '').replace(/\\/g, '/');
-              results.push(`${relPath}:${i + 1}: ${lines[i].trim().slice(0, 120)}`);
+              results.push(`${relPath}:${i + 1}: ${line.trim().slice(0, 120)}`);
             }
           }
         } catch { /* skip unreadable */ }
