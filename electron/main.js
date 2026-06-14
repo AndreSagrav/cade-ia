@@ -6,6 +6,7 @@ import { fileURLToPath } from 'url';
 import net from 'net';
 import crypto from 'crypto';
 import https from 'https';
+import dns from 'dns';
 import { createClient } from '@supabase/supabase-js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -17,8 +18,15 @@ let serverProcess = null;
 const isDev = process.env.NODE_ENV === 'development' || !app.isPackaged;
 let SERVER_PORT = 3001;
 const PRELOAD_PATH = join(__dirname, 'preload.js');
-// Keep-alive agent to speed up repeated HTTPS requests
-const KEEP_ALIVE_AGENT = new https.Agent({ keepAlive: true });
+
+// Force IPv4-first DNS to prevent ENOTFOUND on Windows networks with broken IPv6
+dns.setDefaultResultOrder('ipv4first');
+
+// Keep-alive agent with IPv4-only lookup to avoid DNS issues
+const KEEP_ALIVE_AGENT = new https.Agent({
+  keepAlive: true,
+  family: 4,
+});
 // Optional autoUpdater placeholder (disabled at runtime)
 let AutoUpdaterRef = null;
 
@@ -48,9 +56,6 @@ async function findAvailablePort(preferred) {
 }
 
 async function startServer() {
-  // In production we avoid HTTP server and use IPC; nothing to do here.
-  if (!isDev) return;
-
   const desired = Number(process.env.ELECTRON_SERVER_PORT || process.env.PORT || 3001);
   SERVER_PORT = await findAvailablePort([desired, 3002, 3003, 3004]);
 
@@ -91,8 +96,9 @@ function createWindow() {
     mainWindow.loadURL(`http://localhost:${devPort}`);
     mainWindow.webContents.openDevTools({ mode: 'detach' });
   } else {
-    // Load built static files without any HTTP server
-    mainWindow.loadFile(join(__dirname, '..', 'dist', 'index.html'));
+    // Load from local server so API calls use HTTP (avoids IPC DNS issues)
+    await new Promise(r => setTimeout(r, 800)); // give server time to start
+    mainWindow.loadURL(`http://localhost:${SERVER_PORT}`);
   }
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
@@ -567,7 +573,14 @@ ipcMain.handle('ai:stream-start', async (event, payload) => {
       });
       res.on('end', () => { try { clearInterval(hb); } catch {}; webContents.send('ai:stream:done', { sessionId }); });
     });
-    req.on('error', (err) => { try { clearInterval(hb); } catch {}; webContents.send('ai:stream:error', { sessionId, error: err.message }); });
+    req.on('error', (err) => {
+      try { clearInterval(hb); } catch {}
+      let msg = err.message;
+      if (err.code === 'ENOTFOUND') {
+        msg = `❌ No se pudo resolver ${options.hostname}.\n\nTu red no puede contactar este proveedor. Probá:\n• Usar otro modelo (ej: NVIDIA o Gemini)\n• Desactivar IPv6 en tu adaptador de red\n• Ejecutar: ipconfig /flushdns`;
+      }
+      webContents.send('ai:stream:error', { sessionId, error: msg });
+    });
     req.setTimeout(45000, () => { try { clearInterval(hb); } catch {}; try { req.destroy(new Error('timeout')); } catch {}; webContents.send('ai:stream:error', { sessionId, error: 'Timeout' }); });
     req.write(data);
     req.end();

@@ -59,7 +59,7 @@ try {
         }
 
         // AI via IPC when available
-        if ((path.startsWith('/api/ai/') || path === '/api/ai-unified/chat' || path === '/api/ai/agent') && wapi?.ai?.start) {
+        if (false && (path.startsWith('/api/ai/') || path === '/api/ai-unified/chat' || path === '/api/ai/agent') && wapi?.ai?.start) {
           const payload = body?.provider ? body : { provider: 'openrouter', model: body?.model || 'openrouter/auto', system: body?.system || '', messages: body?.messages || [], apiKey: (window as any)?.__OPENROUTER_KEY__ || '' };
           const session = await wapi.ai.start(payload);
           if (session?.error) return new Response(JSON.stringify({ error: session.error }), { status: 500, headers: { 'Content-Type': 'application/json' } });
