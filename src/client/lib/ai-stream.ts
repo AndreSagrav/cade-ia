@@ -446,78 +446,37 @@ async function streamAgentChat(): Promise<void> {
     // Increment requests immediately so it counts even if it 504s
     chatStore.incrementModelRequests(actualModelId);
 
-    const wapi: any = (typeof window !== 'undefined' ? (window as any).api : null);
-    const useIpc = !!(wapi && wapi.ai && wapi.ai.start);
+    // In Agent Mode, we MUST use the local Express server endpoint (/api/ai/agent)
+    // because it handles tool execution, terminal commands, and file operations securely.
+    // We do NOT use the direct wapi.ai.start IPC proxy here.
+    const authToken = (typeof window !== 'undefined' ? localStorage.getItem('codeai-auth') : '') || '';
+    const authUser = (typeof window !== 'undefined' ? localStorage.getItem('codeai-user') : '') || '';
+    const { response, abort } = api.streamAgent(body, {
+      'x-auth-token': authToken,
+      'x-auth-user': authUser,
+    });
+    
+    const ctrl = new AbortController();
+    ctrl.signal.addEventListener('abort', () => abort());
+    chatStore.setAbortController(ctrl);
 
-    if (useIpc) {
-      const session = await wapi.ai.start({
-        provider: model.provider,
-        model: apiModelId,
-        system,
-        messages: historyMessages,
-        apiKey: ((useSettingsStore.getState().apiKeys as any) || {})[model.provider] || (useSettingsStore.getState().apiKeys as any)?.openrouter || '',
-        username: (typeof window !== 'undefined' ? localStorage.getItem('codeai-user') : '') || ''
-      });
-      if (session?.error) throw new Error(session.error);
-
-      const sessionId = session.sessionId;
-      const ctrl = new AbortController();
-      ctrl.signal.addEventListener('abort', () => wapi.ai.abort(sessionId));
-      chatStore.setAbortController(ctrl);
-
-      let lastBeat = Date.now();
-      let retried = false;
-      const stopChunk = wapi.ai.onChunk(sessionId, (text: string) => {
-        fullContent += text;
-        chatStore.setStreamContent(fullContent);
-        lastBeat = Date.now();
-      });
-      const stopError = wapi.ai.onError(sessionId, (err: string) => {
-        chatStore.addMessage({ id: Date.now().toString(36), role: 'assistant', content: `Error: ${err}`, timestamp: Date.now(), model: selectedModel });
-      });
-      const stopHb = wapi.ai.onHeartbeat(sessionId, () => { lastBeat = Date.now(); });
-
-      const stallTimer = setInterval(async () => {
-        if (Date.now() - lastBeat > 6000 && !retried) {
-          retried = true;
-          try { ctrl.abort(); } catch {}
-          clearInterval(stallTimer);
-          chatStore.setStreaming(false);
-          chatStore.setStreamContent('');
-          await streamAgentChat();
-        }
-      }, 1500);
-      await new Promise<void>((resolve) => {
-        const stopDone = wapi.ai.onDone(sessionId, () => { stopChunk(); stopError(); stopHb(); clearInterval(stallTimer); stopDone(); resolve(); });
-      });
-    } else {
-      const authToken = (typeof window !== 'undefined' ? localStorage.getItem('codeai-auth') : '') || '';
-      const authUser = (typeof window !== 'undefined' ? localStorage.getItem('codeai-user') : '') || '';
-      const { response, abort } = api.streamAgent(body, {
-        'x-auth-token': authToken,
-        'x-auth-user': authUser,
-      });
-      const ctrl = new AbortController();
-      ctrl.signal.addEventListener('abort', () => abort());
-      chatStore.setAbortController(ctrl);
-
-      const res = await response;
-      if (!res.ok) {
-        const errText = await res.text();
-        let detail = '';
-        try { const j = JSON.parse(errText); detail = j?.error?.message || j?.message || ''; } catch {}
-        let msg = `Error HTTP ${res.status}`;
-        if (res.status === 410) msg = `⚠️ El modelo ya no está disponible en este proveedor (HTTP 410 Gone).\n\nProbablemente fue removido o renombrado. Seleccioná otro modelo en el selector arriba del chat.`;
-        else if (res.status === 401) msg = `🔐 Error de autenticación (HTTP 401). Verificá tu API key en Configuración.`;
-        else if (res.status === 429) msg = `⏳ Límite de tasa excedido (HTTP 429). Esperá unos segundos o cambiá de modelo.`;
-        else if (res.status === 500) msg = `🔥 Error interno del servidor (HTTP 500). El proveedor tiene problemas. Intentá más tarde.`;
-        else if (res.status === 503) msg = `🔧 Servicio no disponible (HTTP 503). El proveedor está en mantenimiento.`;
-        else if (detail) msg += `: ${detail}`;
-        else msg += `: ${errText.slice(0, 200)}`;
-        chatStore.addMessage({ id: Date.now().toString(36), role: 'assistant', content: msg, timestamp: Date.now(), model: selectedModel, });
-        chatStore.setStreaming(false);
-        return;
-      }
+    const res = await response;
+    if (!res.ok) {
+      const errText = await res.text();
+      let detail = '';
+      try { const j = JSON.parse(errText); detail = j?.error?.message || j?.message || ''; } catch {}
+      let msg = `Error HTTP ${res.status}`;
+      if (res.status === 410) msg = `⚠️ El modelo ya no está disponible en este proveedor (HTTP 410 Gone).\n\nProbablemente fue removido o renombrado. Seleccioná otro modelo en el selector arriba del chat.`;
+      else if (res.status === 401) msg = `🔐 Error de autenticación (HTTP 401). Verificá tu API key en Configuración.`;
+      else if (res.status === 429) msg = `⏳ Límite de tasa excedido (HTTP 429). Esperá unos segundos o cambiá de modelo.`;
+      else if (res.status === 500) msg = `🔥 Error interno del servidor (HTTP 500). El proveedor tiene problemas. Intentá más tarde.`;
+      else if (res.status === 503) msg = `🔧 Servicio no disponible (HTTP 503). El proveedor está en mantenimiento.`;
+      else if (detail) msg += `: ${detail}`;
+      else msg += `: ${errText.slice(0, 200)}`;
+      chatStore.addMessage({ id: Date.now().toString(36), role: 'assistant', content: msg, timestamp: Date.now(), model: selectedModel, });
+      chatStore.setStreaming(false);
+      return;
+    }
 
       const reader = res.body?.getReader();
       if (!reader) throw new Error('No response body');

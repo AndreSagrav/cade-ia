@@ -583,7 +583,7 @@ ipcMain.handle('ai:stream-start', async (event, payload) => {
       }
       webContents.send('ai:stream:error', { sessionId, error: msg });
     });
-    req.setTimeout(45000, () => { try { clearInterval(hb); } catch {}; try { req.destroy(new Error('timeout')); } catch {}; webContents.send('ai:stream:error', { sessionId, error: 'Timeout' }); });
+    req.setTimeout(300000, () => { try { clearInterval(hb); } catch {}; try { req.destroy(new Error('timeout')); } catch {}; webContents.send('ai:stream:error', { sessionId, error: 'Timeout' }); });
     req.write(data);
     req.end();
     AI_SESSIONS.set(sessionId, req);
