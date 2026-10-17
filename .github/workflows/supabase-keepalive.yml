@@ -1,0 +1,25 @@
+name: Supabase Keep Alive
+
+on:
+  schedule:
+    - cron: '0 */6 * * *'   # Cada 6 horas
+  workflow_dispatch:
+
+jobs:
+  keepalive:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping Supabase (lectura + escritura)
+        env:
+          ANON_KEY: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImhucWxldW5ybnpub3luemRxenNxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzkzNzQwMzgsImV4cCI6MjA5NDk1MDAzOH0.haOgam321SOzCkyF-ZvkLKHns_PA3Mjpwdmuy_LryYs
+          BASE: https://hnqleunrnznoynzdqzsq.supabase.co
+        run: |
+          # Escritura (requiere haber ejecutado keepalive_setup.sql en Supabase; si no, solo avisa)
+          W=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE/rest/v1/rpc/ping_keepalive" \
+            -H "apikey: $ANON_KEY" -H "Authorization: Bearer $ANON_KEY" -H "Content-Type: application/json" -d '{}')
+          echo "Escritura: HTTP $W"
+
+          # Lectura
+          curl -s -H "apikey: $ANON_KEY" -H "Authorization: Bearer $ANON_KEY" \
+            "$BASE/rest/v1/ai_api_keys?select=id&limit=1" \
+            -o /dev/null -w "Lectura: %{http_code} - %{time_total}s\n"
